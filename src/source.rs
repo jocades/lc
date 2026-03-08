@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub struct Source<'a> {
     text: &'a str,
     line_starts: Vec<usize>,
