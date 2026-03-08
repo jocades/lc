@@ -1,3 +1,10 @@
+use crate::{
+    ast::{Ast, Expr, ExprId, Lit},
+    interner::Interner,
+    lexer::Token,
+    parser,
+};
+
 #[derive(Debug, Clone, Copy)]
 enum Op {
     Add,
@@ -14,6 +21,44 @@ enum Instruction {
     Echo,
 }
 
+struct Emitter<'a> {
+    ast: &'a Ast,
+    code: Vec<Instruction>,
+}
+
+impl<'a> Emitter<'a> {
+    fn emit(&mut self, id: ExprId) {
+        use Instruction::*;
+
+        match &self.ast[id] {
+            Expr::Lit(Lit::Int(n)) => self.code.push(ConstInt(*n)),
+            Expr::Bin(lhs, op, rhs) => {
+                self.emit(*lhs);
+                self.emit(*rhs);
+                match op {
+                    Token::Plus => self.code.push(Bin(Op::Add)),
+                    _ => unreachable!(),
+                }
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn end(mut self) -> Vec<Instruction> {
+        self.code.push(Instruction::Halt);
+        self.code
+    }
+}
+
+fn emit(ast: &Ast, expr: ExprId) -> Vec<Instruction> {
+    let mut emitter = Emitter {
+        ast,
+        code: Vec::new(),
+    };
+    emitter.emit(expr);
+    emitter.end()
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Value {
     Int(i32),
@@ -27,7 +72,30 @@ impl std::fmt::Display for Value {
     }
 }
 
-fn interpret(code: &[Instruction]) {
+pub struct VM {
+    interner: Interner,
+}
+
+impl VM {
+    pub fn new() -> Self {
+        Self {
+            interner: Interner::with_capacity(1024),
+        }
+    }
+
+    pub fn interpret(&mut self, source: &str) {
+        let (ast, expr) = parser::parse(source, &mut self.interner).unwrap();
+        let mut emitter = Emitter {
+            ast: &ast,
+            code: Vec::new(),
+        };
+        emitter.emit(expr);
+        let code = emitter.end();
+        run(&code);
+    }
+}
+
+fn run(code: &[Instruction]) {
     let mut ip = 0;
     let mut stack = Vec::with_capacity(256);
 
@@ -68,6 +136,6 @@ mod tests {
     fn add() {
         use Instruction::*;
         let code = vec![ConstInt(2), ConstInt(3), Bin(Op::Add), Echo, Halt];
-        interpret(&code);
+        run(&code);
     }
 }

@@ -4,10 +4,17 @@ use crate::lexer::{Span, Token};
 #[derive(Debug, Clone, Copy)]
 pub struct ExprId(u32);
 
+impl ExprId {
+    #[inline]
+    pub fn get(&self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Default)]
 pub struct Ast {
-    nodes: Vec<Expr>,
-    spans: Vec<Span>,
+    pub nodes: Vec<Expr>,
+    pub spans: Vec<Span>,
 }
 
 impl Ast {
@@ -23,11 +30,19 @@ impl Ast {
     }
 
     pub fn span(&self, id: ExprId) -> Span {
-        self.spans[id.0 as usize].clone()
+        self.spans[id.0 as usize]
     }
 
     pub fn join_span(&self, a: ExprId, b: ExprId) -> Span {
-        self.span(a).start..self.span(b).end
+        self.span(a) | self.span(b)
+    }
+}
+
+impl std::ops::Index<ExprId> for Ast {
+    type Output = Expr;
+
+    fn index(&self, index: ExprId) -> &Self::Output {
+        self.get(index)
     }
 }
 
@@ -38,11 +53,17 @@ pub enum Lit {
     Bool(bool),
 }
 
+pub enum Foo {
+    One(i32),
+    Two,
+    Three,
+}
+
 #[derive(Debug)]
 pub enum Expr {
     Lit(Lit),
     Var(Symbol),
-    Abs(Symbol, ExprId),
+    Fun(Symbol, ExprId),
     App(ExprId, ExprId),
     Bin(ExprId, Token, ExprId),
     Bind {

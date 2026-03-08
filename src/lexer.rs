@@ -1,3 +1,7 @@
+use std::{fmt, ops};
+
+/// A `Token` is a copyable enum, with no data attached, to make it easy to match
+/// against and pass around.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum Token {
@@ -38,8 +42,58 @@ fn lookup_ident(lexeme: &str) -> Token {
     }
 }
 
-pub type Span = std::ops::Range<usize>;
+/// A wrapper for [std::ops::Range<usize>] to make it copyable and extensible.
+///
+/// A span can be constructed from, and turned into, a `std::ops::Range<usize>`.
+/// To join spans use the [Span::union] method or the overloaded `bitwise or`.
+/// ```
+/// let first = Span::from(0..2); // {start: 0, end: 2}
+/// let second = Span::from(4..8); // {start: 4, end: 8}
+/// let span = first | second; // {start: 0, end: 8} same as `first.union(second)`
+/// ```
+#[derive(Clone, Copy)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
 
+impl Span {
+    pub fn range(&self) -> ops::Range<usize> {
+        self.start..self.end
+    }
+
+    pub fn union(&self, other: Span) -> Span {
+        (self.start..other.end).into()
+    }
+}
+
+impl ops::BitOr for Span {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        self.union(rhs)
+    }
+}
+
+impl From<ops::Range<usize>> for Span {
+    fn from(range: ops::Range<usize>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+impl fmt::Debug for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.range().fmt(f)
+    }
+}
+
+/// Iterates over the source text and yields [Token]s.
+///
+/// The `Parser` uses [Lexer::next], [Lexer::span] and [Lexer::lexeme] to retrieve
+/// all the information needed to construct the `AST`.
 #[derive(Default)]
 pub struct Lexer<'a> {
     src: &'a [u8],
@@ -83,11 +137,11 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn span(&self) -> Span {
-        self.start..self.cursor
+        (self.start..self.cursor).into()
     }
 
     pub fn lexeme(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.src[self.span()]) }
+        unsafe { str::from_utf8_unchecked(&self.src[self.start..self.cursor]) }
     }
 
     fn peek(&self) -> Option<u8> {
