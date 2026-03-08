@@ -5,6 +5,7 @@ mod eval;
 mod lexer;
 mod parser;
 mod source;
+mod vm;
 
 pub fn repl() {
     use std::io::{self, BufRead, Write};

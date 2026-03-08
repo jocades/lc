@@ -99,8 +99,8 @@ impl<'a> Parser<'a> {
             self.advance();
             let op = self.previous;
             let rhs = sub(self);
-            let span = self.ast.get(expr).span().start..self.ast.get(rhs).span().end;
-            expr = self.ast.alloc(Expr::Bin(expr, op, rhs, span))
+            let span = self.ast.join_span(expr, rhs);
+            expr = self.ast.alloc(Expr::Bin(expr, op, rhs), span)
         }
         expr
     }
@@ -161,19 +161,23 @@ impl<'a> Parser<'a> {
 
         let mut init = self.expr();
         for param in params.into_iter().rev() {
-            let span = start..self.ast.get(init).span().end;
-            init = self.ast.alloc(Expr::Abs(param, init, span));
+            let span = start..self.ast.span(init).end;
+            init = self.ast.alloc(Expr::Abs(param, init), span);
         }
         self.consume(Token::In, "expected 'in' after let initializer");
 
         let body = self.expr();
-        self.ast.alloc(Expr::Bind {
-            is_recursive,
-            name,
-            init,
-            body,
-            span: start..self.lexer.span().end,
-        })
+        let span = start..self.lexer.span().end;
+
+        self.ast.alloc(
+            Expr::Bind {
+                is_recursive,
+                name,
+                init,
+                body,
+            },
+            span,
+        )
     }
 
     fn cond(&mut self) -> ExprId {
@@ -185,12 +189,14 @@ impl<'a> Parser<'a> {
         self.consume(Token::Else, "expected 'else' after 'then' body");
         let else_branch = self.expr();
         let span = start..self.lexer.span().end;
-        self.ast.alloc(Expr::Cond {
-            cond,
-            then_branch,
-            else_branch,
+        self.ast.alloc(
+            Expr::Cond {
+                cond,
+                then_branch,
+                else_branch,
+            },
             span,
-        })
+        )
     }
 
     fn match_(&mut self) -> ExprId {
@@ -209,9 +215,8 @@ impl<'a> Parser<'a> {
                 | Token::LParen
                 | Token::Lam => {
                     let rhs = self.atom();
-                    // let span = expr.span().start..rhs.span().end;
-                    let span = 0..1;
-                    expr = self.ast.alloc(Expr::App(expr, rhs, span));
+                    let span = self.ast.join_span(expr, rhs);
+                    expr = self.ast.alloc(Expr::App(expr, rhs), span);
                 }
                 _ => break,
             }
@@ -222,21 +227,21 @@ impl<'a> Parser<'a> {
     // atom := ID | LIT | '(' expr ')' | abs ;
     fn atom(&mut self) -> ExprId {
         let current = self.current;
-        let expr = match current {
+        let (expr, span) = match current {
             Token::Ident => {
                 let sym = self.intern_current();
-                Expr::Var(sym, self.lexer.span())
+                (Expr::Var(sym), self.lexer.span())
             }
 
             Token::Num => {
                 let int = self.lexer.lexeme().parse::<i32>().unwrap();
-                Expr::Lit(Lit::Int(int), self.lexer.span())
+                (Expr::Lit(Lit::Int(int)), self.lexer.span())
             }
 
-            Token::True => Expr::Lit(Lit::Bool(true), self.lexer.span()),
-            Token::False => Expr::Lit(Lit::Bool(false), self.lexer.span()),
+            Token::True => (Expr::Lit(Lit::Bool(true)), self.lexer.span()),
+            Token::False => (Expr::Lit(Lit::Bool(false)), self.lexer.span()),
 
-            Token::Unit => Expr::Lit(Lit::Unit, self.lexer.span()),
+            Token::Unit => (Expr::Lit(Lit::Unit), self.lexer.span()),
 
             Token::LParen => {
                 self.advance();
@@ -250,10 +255,10 @@ impl<'a> Parser<'a> {
             _ => panic!("expected expression"),
         };
         self.advance();
-        self.ast.alloc(expr)
+        self.ast.alloc(expr, span)
     }
 
-    /// abs := '\' ID+ '.' expr ;
+    // abs := '\' ID+ '.' expr ;
     fn abs(&mut self) -> ExprId {
         let start = self.lexer.span().start;
         self.advance(); // consume '\'
@@ -267,8 +272,8 @@ impl<'a> Parser<'a> {
 
         let mut body = self.expr();
         for param in params.into_iter().rev() {
-            let span = start..self.ast.get(body).span().end;
-            body = self.ast.alloc(Expr::Abs(param, body, span));
+            let span = start..self.ast.span(body).end;
+            body = self.ast.alloc(Expr::Abs(param, body), span);
         }
 
         body
