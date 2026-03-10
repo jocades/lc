@@ -113,7 +113,7 @@ impl<'a> Resolver<'a> {
                 let local = self.lookup(*sym);
                 self.locals[expr.0 as usize] = local;
             }
-            Expr::Fun(param, body) => {
+            Expr::Abs(param, body) => {
                 self.with_scope(|this| {
                     this.declare(*param);
                     this.resolve(*body);

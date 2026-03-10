@@ -10,25 +10,15 @@ mod source;
 mod vm;
 
 pub fn interpret(source: &str) {
-    use crate::ast::ExprId;
-
     println!("{source}");
 
     let mut interner = Interner::with_capacity(1024);
 
     let (ast, expr) = parser::parse(source, &mut interner).unwrap();
 
-    // println!("{:?}", ast.nodes);
-
     let locals = resolver::resolve(&ast, expr, &interner);
-
-    // println!("{locals:?}");
-    //
-    // for (i, l) in locals.iter().enumerate() {
-    //     if let Some(l) = l {
-    //         println!("{i}: {l:?} => {:?}", ast[ExprId(i as u32)])
-    //     }
-    // }
+    println!("ast:");
+    print!("{}", ast.pretty(expr, &interner, &locals));
 
     checker::typecheck(&ast, expr, &locals);
 }
@@ -54,6 +44,11 @@ pub fn repl() {
         };
 
         let locals = resolver::resolve(&ast, expr, &interner);
+
+        println!("ast:");
+        println!("{}", ast.pretty(expr, &interner, &locals));
+
+        println!("checker:");
         checker::typecheck(&ast, expr, &locals);
 
         buf.clear();

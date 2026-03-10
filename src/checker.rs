@@ -40,12 +40,16 @@ enum Type {
     Abs(TypeId, TypeId),
 }
 
-/// Mapping of `Local` to inferred monomorphic types.
-type Env = Vec<TypeId>;
+#[derive(Debug, Clone)]
+struct Scheme {
+    vars: Vec<TypeVar>,
+    ty: TypeId,
+}
 
+type Env = Vec<Scheme>;
 type Subst = HashMap<TypeVar, TypeId>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum TypeError {
     Mismatch { left: TypeId, right: TypeId },
     InfiniteType { var: TypeVar, ty: TypeId },
@@ -56,6 +60,7 @@ pub struct Checker<'a> {
     tvar_count: u32,
     arena: Arena,
     locals: &'a [Option<Local>],
+    debug_indent: usize,
 }
 
 pub fn typecheck(ast: &Ast, expr: ExprId, locals: &[Option<Local>]) {
@@ -65,7 +70,7 @@ pub fn typecheck(ast: &Ast, expr: ExprId, locals: &[Option<Local>]) {
             println!("result => {}", checker.type_to_string(ty));
         }
         Err(error) => {
-            println!("error: {}", checker.error_to_string(error));
+            println!("{}", checker.error_to_string(error));
         }
     }
 }
@@ -77,13 +82,14 @@ impl<'a> Checker<'a> {
             tvar_count: 0,
             arena: Arena::default(),
             locals,
+            debug_indent: 0,
         }
     }
 
     fn infer_top(&mut self, expr: ExprId) -> Result<TypeId, TypeError> {
         let env = Env::new();
         let (subst, ty) = self.infer(expr, &env)?;
-        Ok(self.substitute(ty, &subst))
+        Ok(self.apply(ty, &subst))
     }
 
     fn fresh_tvar(&mut self) -> TypeId {
@@ -92,15 +98,17 @@ impl<'a> Checker<'a> {
         self.arena.alloc(Type::Var(tvar))
     }
 
+    fn mono(&self, ty: TypeId) -> Scheme {
+        Scheme {
+            vars: Vec::new(),
+            ty,
+        }
+    }
+
     fn compose(&mut self, newer: &Subst, older: &Subst) -> Subst {
-        println!(
-            "compose {} {}",
-            self.subst_to_string(newer),
-            self.subst_to_string(older)
-        );
         let mut composed = Subst::with_capacity(newer.len() + older.len());
         for (&var, &ty) in older {
-            composed.insert(var, self.substitute(ty, newer));
+            composed.insert(var, self.apply(ty, newer));
         }
         for (&var, &ty) in newer {
             composed.insert(var, ty);
@@ -108,50 +116,97 @@ impl<'a> Checker<'a> {
         composed
     }
 
-    fn substitute_env(&mut self, env: &Env, subst: &Subst) -> Env {
-        println!(
-            "substitute_env env={} subst={}",
-            self.env_to_string(env),
-            self.subst_to_string(subst)
-        );
-        let result = env.iter().map(|&ty| self.substitute(ty, subst)).collect();
-        println!("substitute_env_result {}", self.env_to_string(env),);
-        result
+    fn apply_env(&mut self, env: &Env, subst: &Subst) -> Env {
+        env.iter()
+            .map(|scheme| self.apply_scheme(scheme, subst))
+            .collect()
     }
 
-    fn substitute(&mut self, ty_id: TypeId, subst: &Subst) -> TypeId {
-        println!(
-            "substitute {} / {}",
-            self.type_to_string(ty_id),
-            self.subst_to_string(subst)
-        );
+    fn apply_scheme(&mut self, scheme: &Scheme, subst: &Subst) -> Scheme {
+        let mut subst = subst.clone();
+        for &var in &scheme.vars {
+            subst.remove(&var);
+        }
+        Scheme {
+            vars: scheme.vars.clone(),
+            ty: self.apply(scheme.ty, &subst),
+        }
+    }
 
-        let result = match *self.arena.get(ty_id) {
+    fn apply(&mut self, ty_id: TypeId, subst: &Subst) -> TypeId {
+        match *self.arena.get(ty_id) {
             Type::Unit | Type::Int | Type::Bool => ty_id,
             Type::Var(tvar) => match subst.get(&tvar).copied() {
-                Some(ty) => self.substitute(ty, subst),
+                Some(ty) => self.apply(ty, subst),
                 None => ty_id,
             },
             Type::Abs(param, body) => {
-                let param_ty = self.substitute(param, subst);
-                let body_ty = self.substitute(body, subst);
+                let param_ty = self.apply(param, subst);
+                let body_ty = self.apply(body, subst);
                 self.arena.alloc(Type::Abs(param_ty, body_ty))
             }
-        };
+        }
+    }
 
-        println!("substitute_result {}", self.type_to_string(result));
+    fn free_type_vars(&self, ty: TypeId, acc: &mut Vec<TypeVar>) {
+        match self.arena.get(ty) {
+            Type::Unit | Type::Int | Type::Bool => {}
+            Type::Var(var) => {
+                if !acc.contains(var) {
+                    acc.push(*var);
+                }
+            }
+            Type::Abs(param, body) => {
+                self.free_type_vars(*param, acc);
+                self.free_type_vars(*body, acc);
+            }
+        }
+    }
 
-        result
+    fn free_scheme_vars(&self, scheme: &Scheme, acc: &mut Vec<TypeVar>) {
+        let mut vars = Vec::new();
+        self.free_type_vars(scheme.ty, &mut vars);
+        for var in vars {
+            if !scheme.vars.contains(&var) && !acc.contains(&var) {
+                acc.push(var);
+            }
+        }
+    }
+
+    fn free_env_vars(&self, env: &Env, acc: &mut Vec<TypeVar>) {
+        for scheme in env {
+            self.free_scheme_vars(scheme, acc);
+        }
+    }
+
+    fn instantiate(&mut self, scheme: &Scheme) -> TypeId {
+        let mut subst = Subst::new();
+        for &var in &scheme.vars {
+            subst.insert(var, self.fresh_tvar());
+        }
+        self.apply(scheme.ty, &subst)
+    }
+
+    fn generalize(&mut self, env: &Env, ty: TypeId, subst: &Subst) -> Scheme {
+        let ty = self.apply(ty, subst);
+        let env = self.apply_env(env, subst);
+
+        let mut ty_vars = Vec::new();
+        self.free_type_vars(ty, &mut ty_vars);
+
+        let mut env_vars = Vec::new();
+        self.free_env_vars(&env, &mut env_vars);
+
+        let vars = ty_vars
+            .into_iter()
+            .filter(|var| !env_vars.contains(var))
+            .collect();
+
+        Scheme { vars, ty }
     }
 
     fn occurs_in(&mut self, needle: TypeVar, ty: TypeId, subst: &Subst) -> bool {
-        println!(
-            "occurs_in : needle={} ty={} ; subst {}",
-            self.type_var_to_string(needle),
-            self.type_to_string(ty),
-            self.subst_to_string(subst)
-        );
-        let ty = self.substitute(ty, subst);
+        let ty = self.apply(ty, subst);
         match *self.arena.get(ty) {
             Type::Unit | Type::Int | Type::Bool => false,
             Type::Var(var) => var == needle,
@@ -162,34 +217,30 @@ impl<'a> Checker<'a> {
     }
 
     fn bind(&mut self, var: TypeVar, ty: TypeId, subst: &mut Subst) -> Result<(), TypeError> {
-        println!(
-            "bind {} : {} ; subst {}",
-            self.type_var_to_string(var),
-            self.type_to_string(ty),
-            self.subst_to_string(subst)
-        );
-        let ty = self.substitute(ty, subst);
+        let ty = self.apply(ty, subst);
         if matches!(self.arena.get(ty), Type::Var(found) if *found == var) {
             return Ok(());
         }
         if self.occurs_in(var, ty, subst) {
             return Err(TypeError::InfiniteType { var, ty });
         }
+        self.debug(format_args!(
+            "bind {} := {}",
+            self.type_var_to_string(var),
+            self.type_to_string(ty)
+        ));
         subst.insert(var, ty);
-        println!("bind result {}", self.subst_to_string(subst));
         Ok(())
     }
 
     fn unify(&mut self, left: TypeId, right: TypeId, subst: &mut Subst) -> Result<(), TypeError> {
-        println!(
-            "unify {} ~ {} ; subst {}",
+        let left = self.apply(left, subst);
+        let right = self.apply(right, subst);
+        self.debug(format_args!(
+            "unify {} ~ {}",
             self.type_to_string(left),
-            self.type_to_string(right),
-            self.subst_to_string(subst)
-        );
-
-        let left = self.substitute(left, subst);
-        let right = self.substitute(right, subst);
+            self.type_to_string(right)
+        ));
 
         match (*self.arena.get(left), *self.arena.get(right)) {
             (Type::Unit, Type::Unit) | (Type::Int, Type::Int) | (Type::Bool, Type::Bool) => Ok(()),
@@ -205,7 +256,30 @@ impl<'a> Checker<'a> {
     }
 
     fn infer(&mut self, expr: ExprId, env: &Env) -> Result<(Subst, TypeId), TypeError> {
+        self.debug_enter(format_args!("infer {}", self.expr_label(expr)));
+        let result = self.infer_impl(expr, env);
+        match &result {
+            Ok((subst, ty)) => {
+                let ty = self.apply(*ty, subst);
+                let ty = self.type_to_string(ty);
+                let subst = self.subst_to_string(subst);
+                self.debug(format_args!("=> {} with {}", ty, subst));
+            }
+            Err(err) => {
+                let err = self.error_to_string(err.clone());
+                self.debug(format_args!("=> error: {}", err));
+            }
+        }
+        self.debug_exit();
+        result
+    }
+
+    fn infer_impl(&mut self, expr: ExprId, env: &Env) -> Result<(Subst, TypeId), TypeError> {
         match &self.ast[expr] {
+            // T-Lit
+            // Γ ⊢ n : int
+            // Γ ⊢ true : bool
+            // Γ ⊢ () : unit
             Expr::Lit(lit) => Ok((
                 Subst::new(),
                 match lit {
@@ -214,53 +288,63 @@ impl<'a> Checker<'a> {
                     Lit::Bool(_) => self.arena.alloc(Type::Bool),
                 },
             )),
+
+            // T-Var
+            // x : σ ∈ Γ
+            // ------------------------
+            // Γ ⊢ x : instantiate(σ)
             Expr::Var(_) => {
                 let local = self.locals[expr.0 as usize].unwrap();
-                Ok((Subst::new(), env[local.0 as usize]))
+                let scheme = &env[local.0 as usize];
+                let ty = self.instantiate(scheme);
+                self.debug(format_args!(
+                    "instantiate {} as {}",
+                    self.scheme_to_string(scheme),
+                    self.type_to_string(ty)
+                ));
+                Ok((Subst::new(), ty))
             }
-            Expr::Fun(_, body) => {
-                println!("begin fun");
+
+            // T-Abs
+            // Γ, x : α ⊢ e : τ
+            // -----------------------
+            // Γ ⊢ \x.e : α -> τ
+            Expr::Abs(_, body) => {
                 let param_ty = self.fresh_tvar();
                 let mut body_env = env.clone();
-                body_env.push(param_ty);
+                body_env.push(self.mono(param_ty));
 
                 let (subst, body_ty) = self.infer(*body, &body_env)?;
-                let param_ty = self.substitute(param_ty, &subst);
+                let param_ty = self.apply(param_ty, &subst);
                 let fun_ty = self.arena.alloc(Type::Abs(param_ty, body_ty));
-
-                println!(
-                    "fun := {} |- {}",
-                    self.subst_to_string(&subst),
-                    self.type_to_string(fun_ty)
-                );
-
-                println!("end fun");
 
                 Ok((subst, fun_ty))
             }
+
+            // T-App
+            // Γ ⊢ f : τ1      Γ ⊢ a : τ2      β fresh      τ1 ~ τ2 -> β
+            // ---------------------------------------------------------
+            // Γ ⊢ f a : β
             Expr::App(lhs, arg) => {
-                println!("begin app");
                 let (subst_fun, fun_ty) = self.infer(*lhs, env)?;
-                let arg_env = self.substitute_env(env, &subst_fun);
+                let arg_env = self.apply_env(env, &subst_fun);
                 let (subst_arg, arg_ty) = self.infer(*arg, &arg_env)?;
 
                 let mut subst = self.compose(&subst_arg, &subst_fun);
                 let result_ty = self.fresh_tvar();
-                let arg_ty = self.substitute(arg_ty, &subst);
+                let arg_ty = self.apply(arg_ty, &subst);
                 let expected_fun_ty = self.arena.alloc(Type::Abs(arg_ty, result_ty));
 
                 self.unify(fun_ty, expected_fun_ty, &mut subst)?;
 
-                let ty = self.substitute(result_ty, &subst);
-                println!("app := {}", self.type_to_string(ty));
-                println!("end app");
-
-                Ok((subst.clone(), ty))
+                Ok((subst.clone(), self.apply(result_ty, &subst)))
             }
+
+            // Primitive operators
+            // These are checked by assigning each operator a fixed type schema.
             Expr::Bin(lhs, op, rhs) => {
-                println!("begin bin");
                 let (subst_lhs, lhs_ty) = self.infer(*lhs, env)?;
-                let rhs_env = self.substitute_env(env, &subst_lhs);
+                let rhs_env = self.apply_env(env, &subst_lhs);
                 let (subst_rhs, rhs_ty) = self.infer(*rhs, &rhs_env)?;
 
                 let mut subst = self.compose(&subst_rhs, &subst_lhs);
@@ -284,45 +368,61 @@ impl<'a> Checker<'a> {
                     _ => unreachable!("parser only builds binary expressions for binary operators"),
                 };
 
-                println!("end bin");
-                Ok((subst.clone(), self.substitute(result_ty, &subst)))
+                Ok((subst.clone(), self.apply(result_ty, &subst)))
             }
+
+            // T-Let / T-LetRec
+            // Γ ⊢ e1 : τ1      σ = generalize(Γ, τ1)      Γ, x : σ ⊢ e2 : τ2
+            // ----------------------------------------------------------------
+            // Γ ⊢ let x = e1 in e2 : τ2
             Expr::Bind {
                 is_recursive,
                 name: _,
                 init,
                 body,
             } => {
-                println!("begin let");
                 if *is_recursive {
                     let placeholder_ty = self.fresh_tvar();
                     let mut init_env = env.clone();
-                    init_env.push(placeholder_ty);
+                    init_env.push(self.mono(placeholder_ty));
 
                     let (subst_init, init_ty) = self.infer(*init, &init_env)?;
                     let mut subst = subst_init;
                     self.unify(placeholder_ty, init_ty, &mut subst)?;
 
-                    let mut body_env = self.substitute_env(env, &subst);
-                    body_env.push(self.substitute(placeholder_ty, &subst));
+                    let mut body_env = self.apply_env(env, &subst);
+                    let scheme = self.generalize(env, placeholder_ty, &subst);
+                    self.debug(format_args!(
+                        "generalize rec binding as {}",
+                        self.scheme_to_string(&scheme)
+                    ));
+                    body_env.push(scheme);
 
                     let (subst_body, body_ty) = self.infer(*body, &body_env)?;
                     let subst = self.compose(&subst_body, &subst);
 
-                    println!("end let");
-                    Ok((subst.clone(), self.substitute(body_ty, &subst)))
+                    Ok((subst.clone(), self.apply(body_ty, &subst)))
                 } else {
                     let (subst_init, init_ty) = self.infer(*init, env)?;
-                    let mut body_env = self.substitute_env(env, &subst_init);
-                    body_env.push(self.substitute(init_ty, &subst_init));
+                    let mut body_env = self.apply_env(env, &subst_init);
+                    let scheme = self.generalize(env, init_ty, &subst_init);
+                    self.debug(format_args!(
+                        "generalize binding as {}",
+                        self.scheme_to_string(&scheme)
+                    ));
+                    body_env.push(scheme);
 
                     let (subst_body, body_ty) = self.infer(*body, &body_env)?;
                     let subst = self.compose(&subst_body, &subst_init);
 
-                    println!("end let");
-                    Ok((subst.clone(), self.substitute(body_ty, &subst)))
+                    Ok((subst.clone(), self.apply(body_ty, &subst)))
                 }
             }
+
+            // T-If
+            // Γ ⊢ c : bool      Γ ⊢ t : τ      Γ ⊢ e : τ
+            // ------------------------------------------
+            // Γ ⊢ if c then t else e : τ
             Expr::Cond {
                 cond,
                 then_branch,
@@ -333,19 +433,33 @@ impl<'a> Checker<'a> {
                 let bool_ty = self.arena.alloc(Type::Bool);
                 self.unify(cond_ty, bool_ty, &mut subst)?;
 
-                let then_env = self.substitute_env(env, &subst);
+                let then_env = self.apply_env(env, &subst);
                 let (subst_then, then_ty) = self.infer(*then_branch, &then_env)?;
                 subst = self.compose(&subst_then, &subst);
 
-                let else_env = self.substitute_env(env, &subst);
+                let else_env = self.apply_env(env, &subst);
                 let (subst_else, else_ty) = self.infer(*else_branch, &else_env)?;
                 subst = self.compose(&subst_else, &subst);
 
                 self.unify(then_ty, else_ty, &mut subst)?;
 
-                Ok((subst.clone(), self.substitute(then_ty, &subst)))
+                Ok((subst.clone(), self.apply(then_ty, &subst)))
             }
         }
+    }
+
+    fn debug(&self, args: std::fmt::Arguments<'_>) {
+        let pad = "  ".repeat(self.debug_indent);
+        eprintln!("{pad}{args}");
+    }
+
+    fn debug_enter(&mut self, args: std::fmt::Arguments<'_>) {
+        self.debug(args);
+        self.debug_indent += 1;
+    }
+
+    fn debug_exit(&mut self) {
+        self.debug_indent = self.debug_indent.saturating_sub(1);
     }
 
     fn error_to_string(&mut self, error: TypeError) -> String {
@@ -369,6 +483,57 @@ impl<'a> Checker<'a> {
         format!("t{}", var.0)
     }
 
+    fn scheme_to_string(&self, scheme: &Scheme) -> String {
+        if scheme.vars.is_empty() {
+            return self.type_to_string(scheme.ty);
+        }
+
+        let vars = scheme
+            .vars
+            .iter()
+            .map(|var| self.type_var_to_string(*var))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("forall {vars}. {}", self.type_to_string(scheme.ty))
+    }
+
+    fn subst_to_string(&mut self, subst: &Subst) -> String {
+        if subst.is_empty() {
+            return "{}".to_string();
+        }
+
+        let mut entries = subst
+            .iter()
+            .map(|(var, ty)| {
+                let ty = self.apply(*ty, subst);
+                let ty = self.type_to_string(ty);
+                format!("{} := {}", self.type_var_to_string(*var), ty)
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        format!("{{{}}}", entries.join(", "))
+    }
+
+    fn expr_label(&self, expr: ExprId) -> String {
+        match &self.ast[expr] {
+            Expr::Lit(Lit::Unit) => "()".to_string(),
+            Expr::Lit(Lit::Int(n)) => n.to_string(),
+            Expr::Lit(Lit::Bool(b)) => b.to_string(),
+            Expr::Var(_) => format!("var@{}", expr.0),
+            Expr::Abs(_, _) => format!("fun@{}", expr.0),
+            Expr::App(_, _) => format!("app@{}", expr.0),
+            Expr::Bin(_, op, _) => format!("bin({op:?})@{}", expr.0),
+            Expr::Bind { is_recursive, .. } => {
+                if *is_recursive {
+                    format!("let-rec@{}", expr.0)
+                } else {
+                    format!("let@{}", expr.0)
+                }
+            }
+            Expr::Cond { .. } => format!("if@{}", expr.0),
+        }
+    }
+
     fn type_to_string(&self, id: TypeId) -> String {
         match self.arena.get(id) {
             Type::Unit => "()".to_string(),
@@ -383,32 +548,6 @@ impl<'a> Checker<'a> {
                 format!("{param} -> {}", self.type_to_string(*ret))
             }
         }
-    }
-
-    fn subst_to_string(&self, subst: &Subst) -> String {
-        use std::fmt::Write;
-        let mut buf = "{".to_string();
-        for (i, (k, v)) in subst.iter().enumerate() {
-            _ = write!(&mut buf, "t{}: {}", k.0, self.type_to_string(*v));
-            if i < subst.len() - 1 {
-                buf.push_str(", ");
-            }
-        }
-        buf.push('}');
-        buf
-    }
-
-    fn env_to_string(&self, env: &Env) -> String {
-        use std::fmt::Write;
-        let mut buf = "[".to_string();
-        for (i, &ty) in env.iter().enumerate() {
-            _ = write!(&mut buf, "{}", self.type_to_string(ty));
-            if i < env.len() - 1 {
-                buf.push_str(", ");
-            }
-        }
-        buf.push(']');
-        buf
     }
 }
 
@@ -435,9 +574,9 @@ mod tests {
     }
 
     #[test]
-    fn keeps_let_monomorphic() {
-        let err = infer_source("let id = \\x.x in let a = id 1 in id true").unwrap_err();
-        assert!(err.contains("int != bool"), "{err}");
+    fn polymorphic_let_allows_multiple_instantiations() {
+        let ty = infer_source("let id = \\x.x in let a = id 1 in id true").unwrap();
+        assert_eq!(ty, "bool");
     }
 
     #[test]

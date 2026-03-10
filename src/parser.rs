@@ -18,8 +18,8 @@ case     := pattern '->' expr ;
 pattern  := pat_atom ('|' pat_atom)* ;
 pat_atom := '_' | ID | LIT ;
 app      := atom atom* ;
-atom     := ID | LIT | '(' expr ')' | fun ;
-fun      := '\' ID+ '.' expr ;
+atom     := ID | LIT | '(' expr ')' | abs ;
+abs      := '\' ID+ '.' expr ;
 ```
 */
 use crate::ast::{Ast, Expr, ExprId, Lit};
@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
         let mut init = self.expr();
         for param in params.into_iter().rev() {
             let span = start | self.ast.span(init);
-            init = self.ast.alloc(Expr::Fun(param, init), span);
+            init = self.ast.alloc(Expr::Abs(param, init), span);
         }
         self.consume(Token::In, "expected 'in' after let initializer");
 
@@ -220,6 +220,7 @@ impl<'a> Parser<'a> {
                 | Token::Num
                 | Token::True
                 | Token::False
+                | Token::Unit
                 | Token::LParen
                 | Token::Lam => {
                     let rhs = self.atom();
@@ -232,7 +233,7 @@ impl<'a> Parser<'a> {
         expr
     }
 
-    // atom := ID | LIT | '(' expr ')' | fun ;
+    // atom := ID | LIT | '(' expr ')' | abs ;
     fn atom(&mut self) -> ExprId {
         let (expr, span) = match self.current {
             Token::Ident => {
@@ -257,7 +258,7 @@ impl<'a> Parser<'a> {
                 return expr;
             }
 
-            Token::Lam => return self.fun(),
+            Token::Lam => return self.abs(),
 
             _ => panic!("expected expression"),
         };
@@ -266,8 +267,8 @@ impl<'a> Parser<'a> {
         self.ast.alloc(expr, span)
     }
 
-    // fun := '\' ID+ '.' expr ;
-    fn fun(&mut self) -> ExprId {
+    // abs := '\' ID+ '.' expr ;
+    fn abs(&mut self) -> ExprId {
         let start = self.lexer.span();
         self.advance(); // consume '\'
 
@@ -281,7 +282,7 @@ impl<'a> Parser<'a> {
         let mut body = self.expr();
         for param in params.into_iter().rev() {
             let span = start | self.ast.span(body);
-            body = self.ast.alloc(Expr::Fun(param, body), span);
+            body = self.ast.alloc(Expr::Abs(param, body), span);
         }
 
         body
