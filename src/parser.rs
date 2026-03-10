@@ -234,8 +234,7 @@ impl<'a> Parser<'a> {
 
     // atom := ID | LIT | '(' expr ')' | fun ;
     fn atom(&mut self) -> ExprId {
-        let current = self.current;
-        let (expr, span) = match current {
+        let (expr, span) = match self.current {
             Token::Ident => {
                 let sym = self.intern_current();
                 (Expr::Var(sym), self.lexer.span())
@@ -262,6 +261,7 @@ impl<'a> Parser<'a> {
 
             _ => panic!("expected expression"),
         };
+
         self.advance();
         self.ast.alloc(expr, span)
     }

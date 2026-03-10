@@ -11,7 +11,7 @@ pub enum Token {
     // delims
     Lam, Dot, Comma,
     Semi, LParen, RParen,
-    //operators
+    // operators
     Plus, Minus, Star, Slash,
     Eq, EqEq, Bang, BangEq,
     Gt, GtEq, Lt, LtEq,
@@ -50,6 +50,7 @@ fn lookup_ident(lexeme: &str) -> Token {
 /// let first = Span::from(0..2); // {start: 0, end: 2}
 /// let second = Span::from(4..8); // {start: 4, end: 8}
 /// let span = first | second; // {start: 0, end: 8} same as `first.union(second)`
+/// assert_eq!(span, Span { start: 0, end: 8});
 /// ```
 #[derive(Clone, Copy)]
 pub struct Span {
