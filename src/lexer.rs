@@ -140,7 +140,7 @@ impl<'a> Lexer<'a> {
         (self.start..self.cursor).into()
     }
 
-    pub fn lexeme(&self) -> &str {
+    pub fn lexeme(&self) -> &'a str {
         unsafe { str::from_utf8_unchecked(&self.src[self.start..self.cursor]) }
     }
 

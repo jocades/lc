@@ -1,8 +1,8 @@
 use crate::Symbol;
 use crate::lexer::{Span, Token};
 
-#[derive(Debug, Clone, Copy)]
-pub struct ExprId(u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExprId(pub u32);
 
 impl ExprId {
     #[inline]
@@ -51,12 +51,6 @@ pub enum Lit {
     Unit,
     Int(i32),
     Bool(bool),
-}
-
-pub enum Foo {
-    One(i32),
-    Two,
-    Three,
 }
 
 #[derive(Debug)]

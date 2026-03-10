@@ -3,9 +3,10 @@ use std::collections::HashMap;
 
 use crate::Symbol;
 use crate::ast::{Ast, Expr, ExprId};
+use crate::interner::Interner;
 
-pub fn resolve(ast: &Ast, root: ExprId) -> Vec<Option<Local>> {
-    let mut resolver = Resolver::new(ast);
+pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> Vec<Option<Local>> {
+    let mut resolver = Resolver::new(ast, interner);
     resolver.resolve(root);
     resolver.locals
 }
@@ -37,18 +38,21 @@ type Scope = HashMap<Symbol, Var>;
 struct Resolver<'a> {
     /// A pointer to the `Ast` to retrieve `Expr`s.
     ast: &'a Ast,
+    /// A pointer to the string `interner` to print diagnostics.
+    interner: &'a Interner,
     /// Stack of variable scopes
     scopes: Vec<Scope>,
     /// Array of locals parallel to `Ast::nodes`.
     locals: Vec<Option<Local>>,
-    /// Counter for new locals
+    /// Counter for locals in the **current** scope.
     local_count: u32,
 }
 
 impl<'a> Resolver<'a> {
-    fn new(ast: &'a Ast) -> Self {
+    fn new(ast: &'a Ast, interner: &'a Interner) -> Self {
         Self {
             ast,
+            interner,
             scopes: vec![Scope::new()],
             locals: vec![None; ast.nodes.len()],
             local_count: 0,
@@ -67,9 +71,13 @@ impl<'a> Resolver<'a> {
 
     fn exit_scope(&mut self) {
         let scope = self.scopes.pop().unwrap();
+        self.local_count -= scope.len() as u32;
         for (sym, var) in scope {
             if var.state != VarState::Read {
-                println!("Local variable is defined but never used.")
+                println!(
+                    "Local variable `{}` is defined but never used.",
+                    self.interner.lookup(sym)
+                )
             }
         }
     }
@@ -95,7 +103,7 @@ impl<'a> Resolver<'a> {
                 return Some(var.local);
             }
         }
-        None
+        panic!("unbound variable `{}`", self.interner.lookup(sym));
     }
 
     fn resolve(&mut self, expr: ExprId) {
@@ -103,7 +111,7 @@ impl<'a> Resolver<'a> {
             Expr::Lit(_) => {}
             Expr::Var(sym) => {
                 let local = self.lookup(*sym);
-                self.locals[expr.get() as usize] = local;
+                self.locals[expr.0 as usize] = local;
             }
             Expr::Fun(param, body) => {
                 self.with_scope(|this| {
