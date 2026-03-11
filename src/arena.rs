@@ -11,6 +11,17 @@ impl<T> Clone for Id<T> {
     }
 }
 
+pub trait ArenaIndex {
+    fn index(self) -> usize;
+}
+
+impl<T> ArenaIndex for Id<T> {
+    #[inline]
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 pub struct Arena<T>(Vec<T>);
 
 impl<T> Default for Arena<T> {
@@ -41,16 +52,5 @@ impl<T> Index<Id<T>> for Arena<T> {
 
     fn index(&self, index: Id<T>) -> &Self::Output {
         &self.0[index.0 as usize]
-    }
-}
-
-pub trait ArenaIndex {
-    fn index(self) -> usize;
-}
-
-impl<T> ArenaIndex for Id<T> {
-    #[inline]
-    fn index(self) -> usize {
-        self.0 as usize
     }
 }

@@ -22,6 +22,7 @@ pub fn interpret(source: &str) {
     println!("ast:");
     print!("{}", ast.pretty(expr, &interner, &locals));
 
+    println!("checker:");
     checker::typecheck(&ast, expr, &locals);
 }
 

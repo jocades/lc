@@ -1,0 +1,21 @@
+//let id = \x.x in
+//let _ = id 1 in
+//let _ = id true in
+//
+//let A f x = f x in
+//let _ = A id 2 in
+//
+//let succ n = 1 + n in
+//let _ = succ 3 in
+//
+//let rec fact n = if n == 0 then 1 else n * fact (n - 1) in
+//let _ = fact 5 in
+
+let fact_tail_rec n =
+  let rec fact' n acc =
+    if n == 0 then acc
+    else fact' (n - 1) (n * acc)
+  in
+  fact' n 1;
+
+fact_tail_rec 5

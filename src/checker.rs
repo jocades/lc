@@ -81,6 +81,15 @@ struct Scheme {
     ty: TypeId,
 }
 
+impl Scheme {
+    fn monomorphic(ty: TypeId) -> Self {
+        Self {
+            vars: Vec::new(),
+            ty,
+        }
+    }
+}
+
 type Env = Vec<Scheme>;
 type Subst = HashMap<TypeVar, TypeId>;
 
@@ -133,13 +142,6 @@ impl<'a> Checker<'a> {
         self.types.alloc(Type::Var(tvar))
     }
 
-    fn mono(&self, ty: TypeId) -> Scheme {
-        Scheme {
-            vars: Vec::new(),
-            ty,
-        }
-    }
-
     fn compose(&mut self, newer: &Subst, older: &Subst) -> Subst {
         let mut composed = Subst::with_capacity(newer.len() + older.len());
         for (&var, &ty) in older {
@@ -168,12 +170,12 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn apply(&mut self, ty_id: TypeId, subst: &Subst) -> TypeId {
-        match self.types[ty_id] {
-            Type::Unit | Type::Int | Type::Bool => ty_id,
-            Type::Var(tvar) => match subst.get(&tvar).copied() {
+    fn apply(&mut self, ty: TypeId, subst: &Subst) -> TypeId {
+        match self.types[ty] {
+            Type::Unit | Type::Int | Type::Bool => ty,
+            Type::Var(var) => match subst.get(&var).copied() {
                 Some(ty) => self.apply(ty, subst),
-                None => ty_id,
+                None => ty,
             },
             Type::Abs(param, body) => {
                 let param_ty = self.apply(param, subst);
@@ -319,9 +321,9 @@ impl<'a> Checker<'a> {
             Expr::Lit(lit) => Ok((
                 Subst::new(),
                 match lit {
-                    Lit::Unit => self.types.unit,
-                    Lit::Int(_) => self.types.int,
-                    Lit::Bool(_) => self.types.bool,
+                    Lit::Unit => self.types.unit(),
+                    Lit::Int(_) => self.types.int(),
+                    Lit::Bool(_) => self.types.bool(),
                 },
             )),
 
@@ -348,7 +350,7 @@ impl<'a> Checker<'a> {
             Expr::Abs(_, body) => {
                 let param_ty = self.fresh_tvar();
                 let mut body_env = env.clone();
-                body_env.push(self.mono(param_ty));
+                body_env.push(Scheme::monomorphic(param_ty));
 
                 let (subst, body_ty) = self.infer(*body, &body_env)?;
                 let param_ty = self.apply(param_ty, &subst);
@@ -386,23 +388,19 @@ impl<'a> Checker<'a> {
                 let mut subst = self.compose(&subst_rhs, &subst_lhs);
                 let result_ty = match op {
                     Token::Plus | Token::Minus | Token::Star | Token::Slash => {
-                        // let int_ty = self.arena.alloc(Type::Int);
-                        self.unify(lhs_ty, self.types.int, &mut subst)?;
-                        self.unify(rhs_ty, self.types.int, &mut subst)?;
-                        self.types.int
-                        // int_ty
+                        let int_ty = self.types.int();
+                        self.unify(lhs_ty, int_ty, &mut subst)?;
+                        self.unify(rhs_ty, int_ty, &mut subst)?;
+                        int_ty
                     }
                     Token::Gt | Token::GtEq | Token::Lt | Token::LtEq => {
-                        // let int_ty = self.arena.alloc(Type::Int);
-                        self.unify(lhs_ty, self.types.int, &mut subst)?;
-                        self.unify(rhs_ty, self.types.int, &mut subst)?;
-                        // self.arena.alloc(Type::Bool)
-                        self.types.int
+                        self.unify(lhs_ty, self.types.int(), &mut subst)?;
+                        self.unify(rhs_ty, self.types.int(), &mut subst)?;
+                        self.types.bool()
                     }
                     Token::EqEq | Token::BangEq => {
                         self.unify(lhs_ty, rhs_ty, &mut subst)?;
-                        // self.arena.alloc(Type::Bool)
-                        self.types.int
+                        self.types.bool()
                     }
                     _ => unreachable!("parser only builds binary expressions for binary operators"),
                 };
@@ -423,7 +421,7 @@ impl<'a> Checker<'a> {
                 if *is_recursive {
                     let placeholder_ty = self.fresh_tvar();
                     let mut init_env = env.clone();
-                    init_env.push(self.mono(placeholder_ty));
+                    init_env.push(Scheme::monomorphic(placeholder_ty));
 
                     let (subst_init, init_ty) = self.infer(*init, &init_env)?;
                     let mut subst = subst_init;

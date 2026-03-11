@@ -149,6 +149,10 @@ impl<'a> Lexer<'a> {
         self.src.get(self.cursor).copied()
     }
 
+    fn peek2(&self) -> Option<u8> {
+        self.src.get(self.cursor + 1).copied()
+    }
+
     fn advance(&mut self) -> Option<u8> {
         self.peek().map(|c| {
             self.cursor += 1;
@@ -171,7 +175,18 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        self.seek(|c| c.is_ascii_whitespace());
+        loop {
+            match self.peek() {
+                Some(c) if c.is_ascii_whitespace() => {
+                    self.seek(|c| c.is_ascii_whitespace());
+                }
+                Some(b'/') if self.peek2() == Some(b'/') => {
+                    self.seek(|c| c != b'\n');
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
     }
 
     fn scan_token(&mut self) -> Option<Token> {
@@ -208,7 +223,7 @@ impl<'a> Lexer<'a> {
             b'|' => Token::Pipe,
             // items
             c if c.is_ascii_alphabetic() || c == b'_' => {
-                self.seek(|c| c.is_ascii_alphanumeric() || c == b'_');
+                self.seek(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\'');
                 lookup_ident(self.lexeme())
             }
             c if c.is_ascii_digit() => {
