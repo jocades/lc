@@ -1,11 +1,10 @@
-#![allow(unused)]
 use std::collections::HashMap;
 
 use crate::Symbol;
-use crate::ast::{Ast, Expr, ExprId};
+use crate::ast::{Ast, AstTable, Expr, ExprId, Table};
 use crate::interner::Interner;
 
-pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> Vec<Option<Local>> {
+pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> AstTable<Option<Local>> {
     let mut resolver = Resolver::new(ast, interner);
     resolver.resolve(root);
     resolver.locals
@@ -43,7 +42,7 @@ struct Resolver<'a> {
     /// Stack of variable scopes
     scopes: Vec<Scope>,
     /// Array of locals parallel to `Ast::nodes`.
-    locals: Vec<Option<Local>>,
+    locals: Table<ExprId, Option<Local>>,
     /// Counter for locals in the **current** scope.
     local_count: u32,
 }
@@ -54,7 +53,7 @@ impl<'a> Resolver<'a> {
             ast,
             interner,
             scopes: vec![Scope::new()],
-            locals: vec![None; ast.nodes.len()],
+            locals: ast.table(None),
             local_count: 0,
         }
     }
@@ -111,7 +110,7 @@ impl<'a> Resolver<'a> {
             Expr::Lit(_) => {}
             Expr::Var(sym) => {
                 let local = self.lookup(*sym);
-                self.locals[expr.0 as usize] = local;
+                self.locals[expr] = local;
             }
             Expr::Abs(param, body) => {
                 self.with_scope(|this| {

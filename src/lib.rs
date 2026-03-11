@@ -1,6 +1,8 @@
 mod ast;
 mod interner;
 use interner::{Interner, Symbol};
+
+mod arena;
 mod checker;
 mod compiler;
 mod lexer;

@@ -1,35 +1,53 @@
+use std::marker::PhantomData;
+use std::ops::{Index, IndexMut};
+
 use crate::Symbol;
+use crate::arena::{Arena, ArenaIndex, Id};
 use crate::interner::Interner;
 use crate::lexer::{Span, Token};
 use crate::resolver::Local;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExprId(pub u32);
+pub type ExprId = Id<Node>;
+
+#[derive(Debug)]
+pub struct Node {
+    expr: Expr,
+    span: Span,
+}
 
 #[derive(Default)]
 pub struct Ast {
-    pub nodes: Vec<Expr>,
-    pub spans: Vec<Span>,
+    arena: Arena<Node>,
 }
 
 impl Ast {
-    pub fn alloc(&mut self, expr: Expr, span: Span) -> ExprId {
-        let id = ExprId(self.nodes.len() as u32);
-        self.nodes.push(expr);
-        self.spans.push(span);
-        id
-    }
-
-    pub fn get(&self, id: ExprId) -> &Expr {
-        &self.nodes[id.0 as usize]
+    pub fn alloc(&mut self, expr: Expr, span: impl Into<Span>) -> ExprId {
+        self.arena.alloc(Node {
+            expr,
+            span: span.into(),
+        })
     }
 
     pub fn span(&self, id: ExprId) -> Span {
-        self.spans[id.0 as usize]
+        self.arena[id].span
     }
 
     pub fn join_span(&self, a: ExprId, b: ExprId) -> Span {
         self.span(a) | self.span(b)
+    }
+
+    pub fn table<T: Clone>(&self, default: T) -> Table<ExprId, T> {
+        Table {
+            items: vec![default; self.arena.len()],
+            _indexed_by: PhantomData,
+        }
+    }
+
+    pub fn table_with<T>(&self, f: impl Fn() -> T) -> Table<ExprId, T> {
+        Table {
+            items: (0..self.arena.len()).map(|_| f()).collect(),
+            _indexed_by: PhantomData,
+        }
     }
 }
 
@@ -37,7 +55,30 @@ impl std::ops::Index<ExprId> for Ast {
     type Output = Expr;
 
     fn index(&self, index: ExprId) -> &Self::Output {
-        self.get(index)
+        &self.arena[index].expr
+    }
+}
+
+pub struct Table<I, T> {
+    items: Vec<T>,
+    _indexed_by: PhantomData<I>,
+}
+
+pub type AstTable<T> = Table<ExprId, T>;
+
+impl<I: ArenaIndex, T> Index<I> for Table<I, T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, id: I) -> &Self::Output {
+        &self.items[id.index()]
+    }
+}
+
+impl<I: ArenaIndex, T> IndexMut<I> for Table<I, T> {
+    #[inline]
+    fn index_mut(&mut self, id: I) -> &mut Self::Output {
+        &mut self.items[id.index()]
     }
 }
 
@@ -69,7 +110,12 @@ pub enum Expr {
 }
 
 impl Ast {
-    pub fn pretty(&self, root: ExprId, interner: &Interner, locals: &[Option<Local>]) -> String {
+    pub fn pretty(
+        &self,
+        root: ExprId,
+        interner: &Interner,
+        locals: &AstTable<Option<Local>>,
+    ) -> String {
         let mut out = String::new();
         self.pretty_expr(root, interner, locals, 0, &mut out);
         out
@@ -79,7 +125,7 @@ impl Ast {
         &self,
         expr: ExprId,
         interner: &Interner,
-        locals: &[Option<Local>],
+        locals: &AstTable<Option<Local>>,
         indent: usize,
         out: &mut String,
     ) {
@@ -92,7 +138,7 @@ impl Ast {
             Expr::Lit(Lit::Bool(b)) => _ = writeln!(out, "{pad}(lit {b})"),
             Expr::Var(sym) => {
                 let name = interner.lookup(*sym);
-                match locals[expr.0 as usize] {
+                match locals[expr] {
                     Some(Local(local)) => _ = writeln!(out, "{pad}(var {name} :local {local})"),
                     None => _ = writeln!(out, "{pad}(var {name})"),
                 }

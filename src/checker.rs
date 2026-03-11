@@ -3,36 +3,71 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{Ast, Expr, ExprId, Lit},
+    arena::{Arena, ArenaIndex, Id},
+    ast::{Ast, AstTable, Expr, ExprId, Lit},
     lexer::Token,
     resolver::Local,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TypeId(u32);
+type TypeId = Id<Type>;
 
-#[derive(Default)]
-struct Arena {
-    types: Vec<Type>,
+pub struct Types {
+    arena: Arena<Type>,
+    int: TypeId,
+    bool: TypeId,
+    unit: TypeId,
 }
 
-impl Arena {
-    fn alloc(&mut self, ty: Type) -> TypeId {
-        let id = TypeId(self.types.len() as u32);
-        self.types.push(ty);
-        id
+impl Types {
+    pub fn new() -> Self {
+        let mut arena = Arena::new();
+        let int = arena.alloc(Type::Int);
+        let bool = arena.alloc(Type::Bool);
+        let unit = arena.alloc(Type::Unit);
+
+        Self {
+            arena,
+            int,
+            bool,
+            unit,
+        }
     }
 
-    fn get(&self, id: TypeId) -> &Type {
-        &self.types[id.0 as usize]
+    #[inline]
+    pub fn int(&self) -> TypeId {
+        self.int
+    }
+
+    #[inline]
+    pub fn bool(&self) -> TypeId {
+        self.bool
+    }
+
+    #[inline]
+    pub fn unit(&self) -> TypeId {
+        self.unit
+    }
+}
+
+impl std::ops::Deref for Types {
+    type Target = Arena<Type>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.arena
+    }
+}
+
+impl std::ops::DerefMut for Types {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.arena
     }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-struct TypeVar(u32);
+pub struct TypeVar(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Type {
+pub enum Type {
     Unit,
     Int,
     Bool,
@@ -58,12 +93,12 @@ enum TypeError {
 pub struct Checker<'a> {
     ast: &'a Ast,
     tvar_count: u32,
-    arena: Arena,
-    locals: &'a [Option<Local>],
+    types: Types,
+    locals: &'a AstTable<Option<Local>>,
     debug_indent: usize,
 }
 
-pub fn typecheck(ast: &Ast, expr: ExprId, locals: &[Option<Local>]) {
+pub fn typecheck(ast: &Ast, expr: ExprId, locals: &AstTable<Option<Local>>) {
     let mut checker = Checker::new(ast, locals);
     match checker.infer_top(expr) {
         Ok(ty) => {
@@ -76,11 +111,11 @@ pub fn typecheck(ast: &Ast, expr: ExprId, locals: &[Option<Local>]) {
 }
 
 impl<'a> Checker<'a> {
-    pub fn new(ast: &'a Ast, locals: &'a [Option<Local>]) -> Self {
+    pub fn new(ast: &'a Ast, locals: &'a AstTable<Option<Local>>) -> Self {
         Self {
             ast,
             tvar_count: 0,
-            arena: Arena::default(),
+            types: Types::new(),
             locals,
             debug_indent: 0,
         }
@@ -95,7 +130,7 @@ impl<'a> Checker<'a> {
     fn fresh_tvar(&mut self) -> TypeId {
         let tvar = TypeVar(self.tvar_count);
         self.tvar_count += 1;
-        self.arena.alloc(Type::Var(tvar))
+        self.types.alloc(Type::Var(tvar))
     }
 
     fn mono(&self, ty: TypeId) -> Scheme {
@@ -134,7 +169,7 @@ impl<'a> Checker<'a> {
     }
 
     fn apply(&mut self, ty_id: TypeId, subst: &Subst) -> TypeId {
-        match *self.arena.get(ty_id) {
+        match self.types[ty_id] {
             Type::Unit | Type::Int | Type::Bool => ty_id,
             Type::Var(tvar) => match subst.get(&tvar).copied() {
                 Some(ty) => self.apply(ty, subst),
@@ -143,22 +178,22 @@ impl<'a> Checker<'a> {
             Type::Abs(param, body) => {
                 let param_ty = self.apply(param, subst);
                 let body_ty = self.apply(body, subst);
-                self.arena.alloc(Type::Abs(param_ty, body_ty))
+                self.types.alloc(Type::Abs(param_ty, body_ty))
             }
         }
     }
 
     fn free_type_vars(&self, ty: TypeId, acc: &mut Vec<TypeVar>) {
-        match self.arena.get(ty) {
+        match self.types[ty] {
             Type::Unit | Type::Int | Type::Bool => {}
             Type::Var(var) => {
-                if !acc.contains(var) {
-                    acc.push(*var);
+                if !acc.contains(&var) {
+                    acc.push(var);
                 }
             }
             Type::Abs(param, body) => {
-                self.free_type_vars(*param, acc);
-                self.free_type_vars(*body, acc);
+                self.free_type_vars(param, acc);
+                self.free_type_vars(body, acc);
             }
         }
     }
@@ -207,7 +242,7 @@ impl<'a> Checker<'a> {
 
     fn occurs_in(&mut self, needle: TypeVar, ty: TypeId, subst: &Subst) -> bool {
         let ty = self.apply(ty, subst);
-        match *self.arena.get(ty) {
+        match self.types[ty] {
             Type::Unit | Type::Int | Type::Bool => false,
             Type::Var(var) => var == needle,
             Type::Abs(param, body) => {
@@ -218,7 +253,7 @@ impl<'a> Checker<'a> {
 
     fn bind(&mut self, var: TypeVar, ty: TypeId, subst: &mut Subst) -> Result<(), TypeError> {
         let ty = self.apply(ty, subst);
-        if matches!(self.arena.get(ty), Type::Var(found) if *found == var) {
+        if matches!(self.types[ty], Type::Var(found) if found == var) {
             return Ok(());
         }
         if self.occurs_in(var, ty, subst) {
@@ -236,13 +271,14 @@ impl<'a> Checker<'a> {
     fn unify(&mut self, left: TypeId, right: TypeId, subst: &mut Subst) -> Result<(), TypeError> {
         let left = self.apply(left, subst);
         let right = self.apply(right, subst);
+
         self.debug(format_args!(
             "unify {} ~ {}",
             self.type_to_string(left),
             self.type_to_string(right)
         ));
 
-        match (*self.arena.get(left), *self.arena.get(right)) {
+        match (self.types[left], self.types[right]) {
             (Type::Unit, Type::Unit) | (Type::Int, Type::Int) | (Type::Bool, Type::Bool) => Ok(()),
             (Type::Var(a), Type::Var(b)) if a == b => Ok(()),
             (Type::Var(var), _) => self.bind(var, right, subst),
@@ -283,9 +319,9 @@ impl<'a> Checker<'a> {
             Expr::Lit(lit) => Ok((
                 Subst::new(),
                 match lit {
-                    Lit::Unit => self.arena.alloc(Type::Unit),
-                    Lit::Int(_) => self.arena.alloc(Type::Int),
-                    Lit::Bool(_) => self.arena.alloc(Type::Bool),
+                    Lit::Unit => self.types.unit,
+                    Lit::Int(_) => self.types.int,
+                    Lit::Bool(_) => self.types.bool,
                 },
             )),
 
@@ -294,7 +330,7 @@ impl<'a> Checker<'a> {
             // ------------------------
             // Γ ⊢ x : instantiate(σ)
             Expr::Var(_) => {
-                let local = self.locals[expr.0 as usize].unwrap();
+                let local = self.locals[expr].unwrap();
                 let scheme = &env[local.0 as usize];
                 let ty = self.instantiate(scheme);
                 self.debug(format_args!(
@@ -316,7 +352,7 @@ impl<'a> Checker<'a> {
 
                 let (subst, body_ty) = self.infer(*body, &body_env)?;
                 let param_ty = self.apply(param_ty, &subst);
-                let fun_ty = self.arena.alloc(Type::Abs(param_ty, body_ty));
+                let fun_ty = self.types.alloc(Type::Abs(param_ty, body_ty));
 
                 Ok((subst, fun_ty))
             }
@@ -333,7 +369,7 @@ impl<'a> Checker<'a> {
                 let mut subst = self.compose(&subst_arg, &subst_fun);
                 let result_ty = self.fresh_tvar();
                 let arg_ty = self.apply(arg_ty, &subst);
-                let expected_fun_ty = self.arena.alloc(Type::Abs(arg_ty, result_ty));
+                let expected_fun_ty = self.types.alloc(Type::Abs(arg_ty, result_ty));
 
                 self.unify(fun_ty, expected_fun_ty, &mut subst)?;
 
@@ -350,20 +386,23 @@ impl<'a> Checker<'a> {
                 let mut subst = self.compose(&subst_rhs, &subst_lhs);
                 let result_ty = match op {
                     Token::Plus | Token::Minus | Token::Star | Token::Slash => {
-                        let int_ty = self.arena.alloc(Type::Int);
-                        self.unify(lhs_ty, int_ty, &mut subst)?;
-                        self.unify(rhs_ty, int_ty, &mut subst)?;
-                        int_ty
+                        // let int_ty = self.arena.alloc(Type::Int);
+                        self.unify(lhs_ty, self.types.int, &mut subst)?;
+                        self.unify(rhs_ty, self.types.int, &mut subst)?;
+                        self.types.int
+                        // int_ty
                     }
                     Token::Gt | Token::GtEq | Token::Lt | Token::LtEq => {
-                        let int_ty = self.arena.alloc(Type::Int);
-                        self.unify(lhs_ty, int_ty, &mut subst)?;
-                        self.unify(rhs_ty, int_ty, &mut subst)?;
-                        self.arena.alloc(Type::Bool)
+                        // let int_ty = self.arena.alloc(Type::Int);
+                        self.unify(lhs_ty, self.types.int, &mut subst)?;
+                        self.unify(rhs_ty, self.types.int, &mut subst)?;
+                        // self.arena.alloc(Type::Bool)
+                        self.types.int
                     }
                     Token::EqEq | Token::BangEq => {
                         self.unify(lhs_ty, rhs_ty, &mut subst)?;
-                        self.arena.alloc(Type::Bool)
+                        // self.arena.alloc(Type::Bool)
+                        self.types.int
                     }
                     _ => unreachable!("parser only builds binary expressions for binary operators"),
                 };
@@ -430,8 +469,8 @@ impl<'a> Checker<'a> {
             } => {
                 let (subst_cond, cond_ty) = self.infer(*cond, env)?;
                 let mut subst = subst_cond;
-                let bool_ty = self.arena.alloc(Type::Bool);
-                self.unify(cond_ty, bool_ty, &mut subst)?;
+                // let bool_ty = self.arena.alloc(Type::Bool);
+                self.unify(cond_ty, self.types.bool, &mut subst)?;
 
                 let then_env = self.apply_env(env, &subst);
                 let (subst_then, then_ty) = self.infer(*then_branch, &then_env)?;
@@ -519,33 +558,33 @@ impl<'a> Checker<'a> {
             Expr::Lit(Lit::Unit) => "()".to_string(),
             Expr::Lit(Lit::Int(n)) => n.to_string(),
             Expr::Lit(Lit::Bool(b)) => b.to_string(),
-            Expr::Var(_) => format!("var@{}", expr.0),
-            Expr::Abs(_, _) => format!("fun@{}", expr.0),
-            Expr::App(_, _) => format!("app@{}", expr.0),
-            Expr::Bin(_, op, _) => format!("bin({op:?})@{}", expr.0),
+            Expr::Var(_) => format!("var@{}", expr.index()),
+            Expr::Abs(_, _) => format!("fun@{}", expr.index()),
+            Expr::App(_, _) => format!("app@{}", expr.index()),
+            Expr::Bin(_, op, _) => format!("bin({op:?})@{}", expr.index()),
             Expr::Bind { is_recursive, .. } => {
                 if *is_recursive {
-                    format!("let-rec@{}", expr.0)
+                    format!("let-rec@{}", expr.index())
                 } else {
-                    format!("let@{}", expr.0)
+                    format!("let@{}", expr.index())
                 }
             }
-            Expr::Cond { .. } => format!("if@{}", expr.0),
+            Expr::Cond { .. } => format!("if@{}", expr.index()),
         }
     }
 
     fn type_to_string(&self, id: TypeId) -> String {
-        match self.arena.get(id) {
+        match self.types[id] {
             Type::Unit => "()".to_string(),
             Type::Int => "int".to_string(),
             Type::Bool => "bool".to_string(),
-            Type::Var(var) => self.type_var_to_string(*var),
+            Type::Var(var) => self.type_var_to_string(var),
             Type::Abs(param, ret) => {
-                let param = match self.arena.get(*param) {
-                    Type::Abs(_, _) => format!("({})", self.type_to_string(*param)),
-                    _ => self.type_to_string(*param),
+                let param = match self.types[param] {
+                    Type::Abs(_, _) => format!("({})", self.type_to_string(param)),
+                    _ => self.type_to_string(param),
                 };
-                format!("{param} -> {}", self.type_to_string(*ret))
+                format!("{param} -> {}", self.type_to_string(ret))
             }
         }
     }
