@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::{
     ast::{Ast, Expr, ExprId, Lit},
     interner::Interner,
@@ -83,16 +84,16 @@ impl VM {
         }
     }
 
-    pub fn interpret(&mut self, source: &str) {
-        let (ast, expr) = parser::parse(source, &mut self.interner).unwrap();
-        let mut emitter = Emitter {
-            ast: &ast,
-            code: Vec::new(),
-        };
-        emitter.emit(expr);
-        let code = emitter.end();
-        run(&code);
-    }
+    // pub fn interpret(&mut self, source: &str) {
+    //     let (ast, expr) = parser::parse(source, &mut self.interner).unwrap();
+    //     let mut emitter = Emitter {
+    //         ast: &ast,
+    //         code: Vec::new(),
+    //     };
+    //     emitter.emit(expr);
+    //     let code = emitter.end();
+    //     run(&code);
+    // }
 }
 
 fn run(code: &[Instruction]) {

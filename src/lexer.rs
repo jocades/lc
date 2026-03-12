@@ -47,9 +47,9 @@ fn lookup_ident(lexeme: &str) -> Token {
 /// A span can be constructed from, and turned into, a `std::ops::Range<usize>`.
 /// To join spans use the [Span::union] method or the overloaded `bitwise or`.
 /// ```ignore
-/// let first = Span::from(0..2); // {start: 0, end: 2}
-/// let second = Span::from(4..8); // {start: 4, end: 8}
-/// let span = first | second; // {start: 0, end: 8} same as `first.union(second)`
+/// let first = Span::from(0..2);
+/// let second = Span::from(4..8);
+/// let span = first | second;
 /// assert_eq!(span, Span { start: 0, end: 8});
 /// ```
 #[derive(Clone, Copy)]

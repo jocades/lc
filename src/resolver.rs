@@ -167,6 +167,7 @@ impl<'a> Resolver<'a> {
                 self.resolve(*then_branch);
                 self.resolve(*else_branch);
             }
+            Expr::Error => unreachable!(),
         }
     }
 }
