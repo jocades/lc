@@ -69,8 +69,9 @@ impl<'a> Parser<'a> {
         }
 
         match self.expr() {
-            Ok(expr) => Ok(Some((self.ast, expr))),
             Err(()) => Err(self.diagnostics),
+            Ok(_) if !self.diagnostics.is_empty() => Err(self.diagnostics),
+            Ok(expr) => Ok(Some((self.ast, expr))),
         }
     }
 

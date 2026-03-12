@@ -2,8 +2,6 @@ mod ast;
 mod interner;
 use interner::{Interner, Symbol};
 
-use crate::{arena::Indexer, ir::Lowerer};
-
 mod arena;
 mod checker;
 mod compiler;
@@ -22,42 +20,23 @@ pub fn interpret(source: &str) {
 
     let mut interner = Interner::with_capacity(1024);
 
-    // let (ast, expr) = parser::parse(source, &mut interner).unwrap();
-
-    // parser::parse(source, &mut interner)
-    //     .and_then(|(ast, expr)| {})
-    //     .unwrap();
-
     match parser::parse(source, &mut interner) {
         Ok(Some((ast, expr))) => {
-            let resolution = resolver::resolve(&ast, expr, &interner);
+            let resolution = match resolver::resolve(&ast, expr, &interner) {
+                Ok(resolution) => resolution,
+                Err(diags) => {
+                    eprint!("{}", diagnostic::render_all(source, &diags));
+                    return;
+                }
+            };
             println!("ast:");
             print!("{}", ast.pretty(expr, &interner, &resolution.uses));
         }
         Ok(None) => {}
         Err(diags) => {
-            dbg!(&diags);
+            eprint!("{}", diagnostic::render_all(source, &diags));
         }
     };
-
-    // let resolution = resolver::resolve(&ast, expr, &interner);
-    // println!("ast:");
-    // print!("{}", ast.pretty(expr, &interner, &resolution.uses));
-
-    // println!("checker:");
-
-    // use crate::checker::Checker;
-    // let mut checker = Checker::new(&ast, &resolution);
-    // checker.infer_top(expr).unwrap();
-
-    // for (id, _) in ast.iter() {
-    //     let local = resolution.uses[id];
-    //     let ty = checker.table[id].unwrap();
-    //     println!("{}: {} | {local:?}", id.index(), checker.type_to_string(ty));
-    // }
-
-    // let mut lowerer = Lowerer::new(&ast, &resolution, &checker.table);
-    // lowerer.lower(expr);
 }
 
 pub fn repl() {
@@ -77,30 +56,16 @@ pub fn repl() {
 
         match parser::parse(&buf, &mut interner) {
             Ok(Some((ast, expr))) => {
-                let resolution = resolver::resolve(&ast, expr, &interner);
-                println!("ast:");
-                print!("{}", ast.pretty(expr, &interner, &resolution.uses));
+                if let Err(diags) = resolver::resolve(&ast, expr, &interner) {
+                    eprint!("{}", diagnostic::render_all(&buf, &diags));
+                }
             }
             Ok(None) => {}
             Err(diags) => {
-                dbg!(&diags);
+                eprint!("{}", diagnostic::render_all(&buf, &diags));
             }
         };
 
         buf.clear();
-
-        // let Some((ast, expr)) = parser::parse(&buf, &mut interner) else {
-        //     buf.clear();
-        //     continue;
-        // };
-        //
-        // let resolution = resolver::resolve(&ast, expr, &interner);
-        //
-        // println!("ast:");
-        // println!("{}", ast.pretty(expr, &interner, &resolution.uses));
-        //
-        // println!("checker:");
-        // checker::typecheck(&ast, expr, &resolution);
-        //
     }
 }
