@@ -11,13 +11,13 @@ impl<T> Clone for Id<T> {
     }
 }
 
-pub trait ArenaIndex {
-    fn index(self) -> usize;
+pub trait Indexer {
+    fn index(&self) -> usize;
 }
 
-impl<T> ArenaIndex for Id<T> {
+impl<T> Indexer for Id<T> {
     #[inline]
-    fn index(self) -> usize {
+    fn index(&self) -> usize {
         self.0 as usize
     }
 }
@@ -31,10 +31,12 @@ impl<T> Default for Arena<T> {
 }
 
 impl<T> Arena<T> {
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[inline]
     pub fn alloc(&mut self, t: T) -> Id<T> {
         let id = Id(self.0.len() as u32, PhantomData);
         self.0.push(t);
@@ -44,6 +46,13 @@ impl<T> Arena<T> {
     #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Id<T>, &T)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (Id(i as u32, PhantomData), t))
     }
 }
 

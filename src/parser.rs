@@ -87,9 +87,11 @@ impl<'a> Parser<'a> {
 
     pub fn parse(mut self) -> Option<(Ast, ExprId)> {
         self.advance();
+
         if self.current == Token::Eof {
             return None;
         }
+
         let expr = self.expr();
         Some((self.ast, expr))
     }
@@ -220,7 +222,6 @@ impl<'a> Parser<'a> {
                 | Token::Num
                 | Token::True
                 | Token::False
-                | Token::Unit
                 | Token::LParen
                 | Token::Lam => {
                     let rhs = self.atom();
@@ -249,8 +250,12 @@ impl<'a> Parser<'a> {
             Token::True => (Expr::Lit(Lit::Bool(true)), self.lexer.span()),
             Token::False => (Expr::Lit(Lit::Bool(false)), self.lexer.span()),
 
-            Token::Unit => (Expr::Lit(Lit::Unit), self.lexer.span()),
-
+            // Token::LParen if self.peek == Token::RParen => {
+            //     let start = self.lexer.span();
+            //     self.advance();
+            //     let span = start | self.lexer.span();
+            //     (Expr::Lit(Lit::Unit), span)
+            // }
             Token::LParen => {
                 self.advance();
                 let expr = self.expr();

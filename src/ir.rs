@@ -282,37 +282,6 @@ impl<'a> Lowerer<'a> {
                 }
             }
 
-            Expr::Abs(symbol, id) => todo!(),
-
-            Expr::App(id, id1) => todo!(),
-
-            // Binary expressions lower their operands first, then emit one three-address
-            // instruction whose result lives in a fresh temp.
-            //
-            //   2 + 3
-            //
-            // becomes:
-            //
-            //   t0 = add_int 2, 3
-            Expr::Bin(lhs, op, rhs) => {
-                let lhs = self.lower_expr(*lhs, cx);
-                let rhs = self.lower_expr(*rhs, cx);
-
-                let op = match op {
-                    Token::Plus => BinOp::AddInt,
-                    Token::Minus => BinOp::SubInt,
-                    Token::Star => BinOp::MulInt,
-                    Token::Slash => BinOp::DivInt,
-                    _ => todo!("unsupported binary operator"),
-                };
-
-                let dst = cx.fresh_temp();
-                let instr = Instr::BinOp { dst, op, lhs, rhs };
-                self.push_instr(cx, instr);
-
-                Value::Temp(dst)
-            }
-
             // A let expression lowers by:
             // 1. lowering the initializer,
             // 2. assigning the binder a frame slot,
@@ -343,6 +312,37 @@ impl<'a> Lowerer<'a> {
                 );
 
                 self.lower_expr(*body, cx)
+            }
+
+            Expr::Abs(symbol, id) => todo!(),
+
+            Expr::App(id, id1) => todo!(),
+
+            // Binary expressions lower their operands first, then emit one three-address
+            // instruction whose result lives in a fresh temp.
+            //
+            //   2 + 3
+            //
+            // becomes:
+            //
+            //   t0 = add_int 2, 3
+            Expr::Bin(lhs, op, rhs) => {
+                let lhs = self.lower_expr(*lhs, cx);
+                let rhs = self.lower_expr(*rhs, cx);
+
+                let op = match op {
+                    Token::Plus => BinOp::AddInt,
+                    Token::Minus => BinOp::SubInt,
+                    Token::Star => BinOp::MulInt,
+                    Token::Slash => BinOp::DivInt,
+                    _ => todo!("unsupported binary operator"),
+                };
+
+                let dst = cx.fresh_temp();
+                let instr = Instr::BinOp { dst, op, lhs, rhs };
+                self.push_instr(cx, instr);
+
+                Value::Temp(dst)
             }
 
             // Conditionals lower to explicit control flow with a join block.

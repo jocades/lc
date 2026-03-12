@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
-use crate::arena::{Arena, ArenaIndex, Id};
+use crate::arena::{Arena, Id, Indexer};
 use crate::interner::{Interner, Symbol};
 use crate::lexer::{Span, Token};
 use crate::resolver::Local;
@@ -38,7 +38,7 @@ impl Ast {
     pub fn table<T: Clone>(&self, default: T) -> Table<ExprId, T> {
         Table {
             items: vec![default; self.arena.len()],
-            _indexed_by: PhantomData,
+            _indexer: PhantomData,
         }
     }
 
@@ -46,8 +46,12 @@ impl Ast {
     pub fn table_with<T>(&self, f: impl Fn() -> T) -> Table<ExprId, T> {
         Table {
             items: (0..self.arena.len()).map(|_| f()).collect(),
-            _indexed_by: PhantomData,
+            _indexer: PhantomData,
         }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (ExprId, &Node)> {
+        self.arena.iter()
     }
 }
 
@@ -61,24 +65,24 @@ impl std::ops::Index<ExprId> for Ast {
 
 pub struct Table<I, T> {
     items: Vec<T>,
-    _indexed_by: PhantomData<I>,
+    _indexer: PhantomData<I>,
 }
 
 pub type AstTable<T> = Table<ExprId, T>;
 
-impl<I: ArenaIndex, T> Index<I> for Table<I, T> {
+impl<I: Indexer, T> Index<I> for Table<I, T> {
     type Output = T;
 
     #[inline]
-    fn index(&self, id: I) -> &Self::Output {
-        &self.items[id.index()]
+    fn index(&self, indexer: I) -> &Self::Output {
+        &self.items[indexer.index()]
     }
 }
 
-impl<I: ArenaIndex, T> IndexMut<I> for Table<I, T> {
+impl<I: Indexer, T> IndexMut<I> for Table<I, T> {
     #[inline]
-    fn index_mut(&mut self, id: I) -> &mut Self::Output {
-        &mut self.items[id.index()]
+    fn index_mut(&mut self, indexer: I) -> &mut Self::Output {
+        &mut self.items[indexer.index()]
     }
 }
 
@@ -121,7 +125,7 @@ impl Ast {
         out
     }
 
-    fn pretty_expr(
+    pub fn pretty_expr(
         &self,
         expr: ExprId,
         interner: &Interner,
@@ -133,30 +137,32 @@ impl Ast {
         let pad = "  ".repeat(depth);
 
         match &self[expr] {
-            Expr::Lit(Lit::Unit) => _ = writeln!(out, "{pad}(lit ())"),
-            Expr::Lit(Lit::Int(n)) => _ = writeln!(out, "{pad}(lit {n})"),
-            Expr::Lit(Lit::Bool(b)) => _ = writeln!(out, "{pad}(lit {b})"),
+            Expr::Lit(Lit::Unit) => _ = writeln!(out, "{pad}(lit@{} ())", expr.index()),
+            Expr::Lit(Lit::Int(n)) => _ = writeln!(out, "{pad}(lit@{} {n})", expr.index()),
+            Expr::Lit(Lit::Bool(b)) => _ = writeln!(out, "{pad}(lit@{} {b})", expr.index()),
             Expr::Var(sym) => {
                 let name = interner.lookup(*sym);
                 match locals[expr] {
-                    Some(Local(local)) => _ = writeln!(out, "{pad}(var {name} :local {local})"),
-                    None => _ = writeln!(out, "{pad}(var {name})"),
+                    Some(Local(local)) => {
+                        _ = writeln!(out, "{pad}(var@{} {name} :local {local})", expr.index())
+                    }
+                    None => _ = writeln!(out, "{pad}(var@{} {name})", expr.index()),
                 }
             }
             Expr::Abs(param, body) => {
                 let param = interner.lookup(*param);
-                _ = writeln!(out, "{pad}(fun {param}");
+                _ = writeln!(out, "{pad}(fun@{} {param}", expr.index());
                 self.pretty_expr(*body, interner, locals, depth + 1, out);
                 _ = writeln!(out, "{pad})");
             }
             Expr::App(fun, arg) => {
-                _ = writeln!(out, "{pad}(app");
+                _ = writeln!(out, "{pad}(app@{}", expr.index());
                 self.pretty_expr(*fun, interner, locals, depth + 1, out);
                 self.pretty_expr(*arg, interner, locals, depth + 1, out);
                 _ = writeln!(out, "{pad})");
             }
             Expr::Bin(lhs, op, rhs) => {
-                let _ = writeln!(out, "{pad}(bin {}", pretty_token(*op));
+                let _ = writeln!(out, "{pad}(bin@{} {}", expr.index(), pretty_token(*op));
                 self.pretty_expr(*lhs, interner, locals, depth + 1, out);
                 self.pretty_expr(*rhs, interner, locals, depth + 1, out);
                 let _ = writeln!(out, "{pad})");
@@ -169,7 +175,7 @@ impl Ast {
             } => {
                 let kind = if *is_recursive { "let-rec" } else { "let" };
                 let name = interner.lookup(*name);
-                _ = writeln!(out, "{pad}({kind} {name}");
+                _ = writeln!(out, "{pad}({kind}@{} {name}", expr.index());
                 self.pretty_expr(*init, interner, locals, depth + 1, out);
                 self.pretty_expr(*body, interner, locals, depth + 1, out);
                 _ = writeln!(out, "{pad})");
@@ -179,7 +185,7 @@ impl Ast {
                 then_branch,
                 else_branch,
             } => {
-                _ = writeln!(out, "{pad}(if");
+                _ = writeln!(out, "{pad}(if@{}", expr.index());
                 self.pretty_expr(*cond, interner, locals, depth + 1, out);
                 self.pretty_expr(*then_branch, interner, locals, depth + 1, out);
                 self.pretty_expr(*else_branch, interner, locals, depth + 1, out);
