@@ -31,17 +31,23 @@ pub struct Chunk {
     pub local_count: usize,
 }
 
+#[derive(Debug)]
 struct Patch {
     at: usize,
     target: BlockId,
     kind: PatchKind,
 }
 
+#[derive(Debug)]
 enum PatchKind {
     Jump,
     JumpIfFalse,
 }
 
+// AST = what the program means syntactically.
+// IR = how the program executes.
+// bytecode = how the VM consumes that execution plan.
+//   basically stackify the recipe that the IR gave us
 #[derive(Default)]
 struct Emitter {
     code: Vec<Op>,
@@ -80,9 +86,7 @@ impl Emitter {
             ir::Value::Bool(b) => self.code.push(Op::ConstBool(b)),
             ir::Value::Local(slot) => self.code.push(Op::LoadLocal(slot as u16)),
 
-            ir::Value::Temp(_) => {
-                unreachable!("stack bytecode emission should consume temps structurally")
-            }
+            ir::Value::Temp(_) => {} // already on top of the stack
 
             ir::Value::Env(_) => todo!(),
             ir::Value::Unit => todo!(),
@@ -93,7 +97,7 @@ impl Emitter {
     fn emit_instr(&mut self, instr: &ir::Instr) {
         match instr {
             ir::Instr::StoreLocal { dst, src } => {
-                // self.emit_value(src);
+                self.emit_value(src);
                 self.code.push(Op::StoreLocal(*dst as u16));
             }
 
@@ -120,10 +124,7 @@ impl Emitter {
     fn emit_terminator(&mut self, term: &ir::Terminator) {
         match term {
             ir::Terminator::Return(value) => {
-                // Temps are assumed to be on top of the stack.
-                if !matches!(value, ir::Value::Temp(_)) {
-                    self.emit_value(value);
-                }
+                self.emit_value(value);
                 self.code.push(Op::Return);
             }
 
@@ -144,21 +145,23 @@ impl Emitter {
             } => {
                 self.emit_value(cond);
 
-                let at_join = self.code.len();
+                let at_false = self.code.len();
                 self.code.push(Op::JumpIfFalse(u16::MAX));
                 self.patches.push(Patch {
-                    at: at_join,
+                    at: at_false,
                     target: *else_block,
                     kind: PatchKind::JumpIfFalse,
                 });
 
-                let at_then = self.code.len();
-                self.code.push(Op::Jump(u16::MAX));
-                self.patches.push(Patch {
-                    at: at_then,
-                    target: *then_block,
-                    kind: PatchKind::Jump,
-                });
+                // let at_then = self.code.len();
+                // self.code.push(Op::Jump(u16::MAX));
+                // self.patches.push(Patch {
+                //     at: at_then,
+                //     target: *then_block,
+                //     kind: PatchKind::Jump,
+                // });
+
+                dbg!(&self.patches);
             }
 
             ir::Terminator::Unset => {
@@ -256,6 +259,31 @@ impl VM {
         (lhs, rhs)
     }
 
+    fn exec_bin(&mut self, op: BinOp) {
+        macro_rules! bin {
+            ($as:path, $op:tt) => {{
+                let (lhs, rhs) = self.pop_int2();
+                self.push($as(lhs $op rhs));
+            }};
+        }
+
+        match op {
+            BinOp::AddInt => bin!(Value::Int, +),
+            BinOp::SubInt => bin!(Value::Int, -),
+            BinOp::MulInt => bin!(Value::Int, *),
+            BinOp::DivInt => bin!(Value::Int, /),
+            BinOp::EqInt => bin!(Value::Bool, ==),
+            BinOp::GtInt => bin!(Value::Bool, >),
+            BinOp::GeInt => bin!(Value::Bool, >=),
+            BinOp::LtInt => bin!(Value::Bool, <),
+            BinOp::LeInt => bin!(Value::Bool, <=),
+            BinOp::EqBool => {
+                let (lhs, rhs) = self.pop_bool2();
+                self.push(Value::Bool(lhs == rhs));
+            }
+        }
+    }
+
     pub fn run(&mut self, chunk: &Chunk) -> Value {
         self.ip = 0;
         self.base = self.stack.len();
@@ -265,19 +293,12 @@ impl VM {
             self.push(Value::Int(0));
         }
 
-        macro_rules! bin {
-            ($as:path, $op:tt) => {{
-                let (lhs, rhs) = self.pop_int2();
-                self.push($as(lhs $op rhs));
-            }};
-        }
-
         loop {
             let op = chunk.code[self.ip];
             self.ip += 1;
 
-            println!("{:?}", self.stack);
-            println!("{op:?}");
+            println!("  {:?}", self.stack);
+            println!("{:02}: {op:?}", self.ip - 1);
 
             match op {
                 Op::ConstInt(n) => self.push(Value::Int(n)),
@@ -292,21 +313,7 @@ impl VM {
                     self.store_local(slot, value);
                 }
 
-                Op::Bin(bin_op) => match bin_op {
-                    BinOp::AddInt => bin!(Value::Int, +),
-                    BinOp::SubInt => bin!(Value::Int, -),
-                    BinOp::MulInt => bin!(Value::Int, *),
-                    BinOp::DivInt => bin!(Value::Int, /),
-                    BinOp::EqInt => bin!(Value::Bool, ==),
-                    BinOp::GtInt => bin!(Value::Bool, >),
-                    BinOp::GeInt => bin!(Value::Bool, >=),
-                    BinOp::LtInt => bin!(Value::Bool, <),
-                    BinOp::LeInt => bin!(Value::Bool, <=),
-                    BinOp::EqBool => {
-                        let (lhs, rhs) = self.pop_bool2();
-                        self.push(Value::Bool(lhs == rhs));
-                    }
-                },
+                Op::Bin(bin_op) => self.exec_bin(bin_op),
 
                 Op::Jump(target) => {
                     self.ip = target as usize;

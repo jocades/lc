@@ -48,7 +48,14 @@ pub fn interpret(source: &str) {
 
             let main_fun = &lowerer.program.funs[0];
             let chunk = vm::emit_fun(main_fun);
-            dbg!(&chunk.code);
+
+            println!();
+            chunk
+                .code
+                .iter()
+                .enumerate()
+                .for_each(|(i, op)| println!("{i:02}: {op:?}"));
+            println!();
 
             use vm::VM;
             let mut vm = VM::default();

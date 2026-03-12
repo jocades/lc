@@ -84,11 +84,11 @@ impl<'a> Parser<'a> {
     }
 
     fn matches(&mut self, token: Token) -> bool {
-        if self.current == token {
-            self.advance();
-            return true;
+        if self.current != token {
+            return false;
         }
-        false
+        self.advance();
+        true
     }
 
     fn intern_current(&mut self) -> Symbol {
@@ -229,7 +229,6 @@ impl<'a> Parser<'a> {
         });
 
         self.consume(Token::Then, "expected 'then' after condition")?;
-
         let then_branch = self.expr().unwrap_or_else(|_| {
             self.synchronize(&[Token::Else]);
             self.error_expr
