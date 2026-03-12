@@ -43,6 +43,17 @@ pub fn interpret(source: &str) {
 
             println!("ir:");
             print!("{}", lowerer.program.pretty());
+
+            dbg!(&lowerer.program);
+
+            let main_fun = &lowerer.program.funs[0];
+            let chunk = vm::emit_fun(main_fun);
+            dbg!(&chunk.code);
+
+            use vm::VM;
+            let mut vm = VM::default();
+            let result = vm.run(&chunk);
+            println!("result = {result}");
         }
         Ok(None) => {}
         Err(diags) => {

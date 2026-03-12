@@ -76,7 +76,7 @@ pub enum Instr {
         dst: LocalSlot,
         src: Value,
     },
-    BinOp {
+    Bin {
         dst: TempId,
         op: BinOp,
         lhs: Value,
@@ -106,7 +106,7 @@ pub enum Terminator {
     Return(Value),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum BinOp {
     AddInt,
     SubInt,
@@ -337,7 +337,7 @@ impl<'a> Lowerer<'a> {
                 };
 
                 let dst = cx.fresh_temp();
-                let instr = Instr::BinOp { dst, op, lhs, rhs };
+                let instr = Instr::Bin { dst, op, lhs, rhs };
                 self.push_instr(cx, instr);
 
                 Value::Temp(dst)
@@ -449,7 +449,7 @@ fn pretty_instr(instr: &Instr) -> String {
         Instr::LoadConst { dst, value } => format!("t{dst} = const {}", pretty_value(value)),
         Instr::Move { dst, src } => format!("t{dst} = {}", pretty_value(src)),
         Instr::StoreLocal { dst, src } => format!("l{dst} = {}", pretty_value(src)),
-        Instr::BinOp { dst, op, lhs, rhs } => format!(
+        Instr::Bin { dst, op, lhs, rhs } => format!(
             "t{dst} = {} {}, {}",
             pretty_binop(op),
             pretty_value(lhs),
