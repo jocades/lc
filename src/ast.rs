@@ -111,6 +111,7 @@ pub enum Expr {
         then_branch: ExprId,
         else_branch: ExprId,
     },
+    Error,
 }
 
 impl Ast {
@@ -191,6 +192,7 @@ impl Ast {
                 self.pretty_expr(*else_branch, interner, locals, depth + 1, out);
                 _ = writeln!(out, "{pad})");
             }
+            Expr::Error => _ = writeln!(out, "{pad}(error@{})", expr.index()),
         }
     }
 }

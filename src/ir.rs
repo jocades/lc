@@ -410,6 +410,8 @@ impl<'a> Lowerer<'a> {
                 cx.current_block = join_block;
                 Value::Local(result_local)
             }
+
+            Expr::Error => unreachable!(),
         }
     }
 }

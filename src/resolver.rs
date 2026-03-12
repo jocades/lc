@@ -9,13 +9,13 @@ pub struct Resolution {
     pub binders: AstTable<Option<Local>>,
 }
 
-pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> Resolution {
+pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> crate::PassResult<Resolution> {
     let mut resolver = Resolver::new(ast, interner);
     resolver.resolve(root);
-    Resolution {
+    Ok(Resolution {
         uses: resolver.uses,
         binders: resolver.binders,
-    }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -167,6 +167,7 @@ impl<'a> Resolver<'a> {
                 self.resolve(*then_branch);
                 self.resolve(*else_branch);
             }
+            Expr::Error => unreachable!(),
         }
     }
 }
