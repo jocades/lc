@@ -31,6 +31,18 @@ pub fn interpret(source: &str) {
             };
             println!("ast:");
             print!("{}", ast.pretty(expr, &interner, &resolution.uses));
+
+            use crate::checker::Checker;
+            let mut checker = Checker::new(&ast, &resolution);
+            let Ok(_) = checker.infer_top(expr) else {
+                return;
+            };
+
+            let mut lowerer = ir::Lowerer::new(&ast, &resolution, &checker.table);
+            lowerer.lower(expr);
+
+            println!("ir:");
+            print!("{}", lowerer.program.pretty());
         }
         Ok(None) => {}
         Err(diags) => {

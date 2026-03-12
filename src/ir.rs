@@ -220,8 +220,6 @@ impl<'a> Lowerer<'a> {
         fun.locals = cx.next_local;
         fun.temps = cx.next_temp;
         fun.blocks[cx.current_block as usize].term = Terminator::Return(result);
-
-        dbg!(&self.program);
     }
 
     fn current_fun_mut(&mut self, cx: &FunContext) -> &mut Fun {
@@ -413,5 +411,106 @@ impl<'a> Lowerer<'a> {
 
             Expr::Error => unreachable!(),
         }
+    }
+}
+
+impl Program {
+    pub fn pretty(&self) -> String {
+        use std::fmt::Write;
+
+        let mut out = String::new();
+        let _ = writeln!(out, "entry: fn{}", self.entry);
+
+        for fun in &self.funs {
+            let _ = writeln!(out);
+            let _ = writeln!(
+                out,
+                "fn{}: arity={} locals={} temps={}",
+                fun.id, fun.arity, fun.locals, fun.temps
+            );
+
+            for block in &fun.blocks {
+                let _ = writeln!(out, "  block{}:", block.id);
+
+                for instr in &block.instrs {
+                    let _ = writeln!(out, "    {}", pretty_instr(instr));
+                }
+
+                let _ = writeln!(out, "    {}", pretty_terminator(&block.term));
+            }
+        }
+
+        out
+    }
+}
+
+fn pretty_instr(instr: &Instr) -> String {
+    match instr {
+        Instr::LoadConst { dst, value } => format!("t{dst} = const {}", pretty_value(value)),
+        Instr::Move { dst, src } => format!("t{dst} = {}", pretty_value(src)),
+        Instr::StoreLocal { dst, src } => format!("l{dst} = {}", pretty_value(src)),
+        Instr::BinOp { dst, op, lhs, rhs } => format!(
+            "t{dst} = {} {}, {}",
+            pretty_binop(op),
+            pretty_value(lhs),
+            pretty_value(rhs)
+        ),
+        Instr::MakeClosure { dst, fun, captures } => {
+            let captures = captures
+                .iter()
+                .map(pretty_value)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("t{dst} = closure fn{fun} [{captures}]")
+        }
+        Instr::Call { dst, callee, args } => {
+            let args = args.iter().map(pretty_value).collect::<Vec<_>>().join(", ");
+            format!("t{dst} = call {}({args})", pretty_value(callee))
+        }
+    }
+}
+
+fn pretty_terminator(term: &Terminator) -> String {
+    match term {
+        Terminator::Unset => "<unset>".to_string(),
+        Terminator::Jump(block) => format!("jump block{block}"),
+        Terminator::Branch {
+            cond,
+            then_block,
+            else_block,
+        } => format!(
+            "branch {} -> block{}, block{}",
+            pretty_value(cond),
+            then_block,
+            else_block
+        ),
+        Terminator::Return(value) => format!("return {}", pretty_value(value)),
+    }
+}
+
+fn pretty_value(value: &Value) -> String {
+    match value {
+        Value::Temp(temp) => format!("t{temp}"),
+        Value::Local(local) => format!("l{local}"),
+        Value::Env(slot) => format!("env{slot}"),
+        Value::Int(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Unit => "()".to_string(),
+        Value::Fun(fun) => format!("fn{fun}"),
+    }
+}
+
+fn pretty_binop(op: &BinOp) -> &'static str {
+    match op {
+        BinOp::AddInt => "add_int",
+        BinOp::SubInt => "sub_int",
+        BinOp::MulInt => "mul_int",
+        BinOp::DivInt => "div_int",
+        BinOp::EqInt => "eq_int",
+        BinOp::EqBool => "eq_bool",
+        BinOp::LtInt => "lt_int",
+        BinOp::LeInt => "le_int",
+        BinOp::GtInt => "gt_int",
+        BinOp::GeInt => "ge_int",
     }
 }
