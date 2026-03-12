@@ -2,9 +2,12 @@ mod ast;
 mod interner;
 use interner::{Interner, Symbol};
 
+use crate::{arena::Indexer, ir::Lowerer};
+
 mod arena;
 mod checker;
 mod compiler;
+mod ir;
 mod lexer;
 mod parser;
 mod resolver;
@@ -18,12 +21,24 @@ pub fn interpret(source: &str) {
 
     let (ast, expr) = parser::parse(source, &mut interner).unwrap();
 
-    let locals = resolver::resolve(&ast, expr, &interner);
+    let resolution = resolver::resolve(&ast, expr, &interner);
     println!("ast:");
-    print!("{}", ast.pretty(expr, &interner, &locals));
+    print!("{}", ast.pretty(expr, &interner, &resolution.uses));
 
     println!("checker:");
-    checker::typecheck(&ast, expr, &locals);
+
+    use crate::checker::Checker;
+    let mut checker = Checker::new(&ast, &resolution);
+    checker.infer_top(expr).unwrap();
+
+    for (id, _) in ast.iter() {
+        let local = resolution.uses[id];
+        let ty = checker.table[id].unwrap();
+        println!("{}: {} | {local:?}", id.index(), checker.type_to_string(ty));
+    }
+
+    let mut lowerer = Lowerer::new(&ast, &resolution, &checker.table);
+    lowerer.lower(expr);
 }
 
 pub fn repl() {
@@ -46,13 +61,13 @@ pub fn repl() {
             continue;
         };
 
-        let locals = resolver::resolve(&ast, expr, &interner);
+        let resolution = resolver::resolve(&ast, expr, &interner);
 
         println!("ast:");
-        println!("{}", ast.pretty(expr, &interner, &locals));
+        println!("{}", ast.pretty(expr, &interner, &resolution.uses));
 
         println!("checker:");
-        checker::typecheck(&ast, expr, &locals);
+        checker::typecheck(&ast, expr, &resolution);
 
         buf.clear();
     }

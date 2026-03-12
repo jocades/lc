@@ -1,24 +1,24 @@
 #![allow(unused)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-    arena::{Arena, ArenaIndex, Id},
+    arena::{Arena, Id, Indexer},
     ast::{Ast, AstTable, Expr, ExprId, Lit},
     lexer::Token,
-    resolver::Local,
+    resolver::{Local, Resolution},
 };
 
-type TypeId = Id<Type>;
+pub type TypeId = Id<Type>;
 
-pub struct Types {
+pub struct Store {
     arena: Arena<Type>,
     int: TypeId,
     bool: TypeId,
     unit: TypeId,
 }
 
-impl Types {
+impl Store {
     pub fn new() -> Self {
         let mut arena = Arena::new();
         let int = arena.alloc(Type::Int);
@@ -49,7 +49,7 @@ impl Types {
     }
 }
 
-impl std::ops::Deref for Types {
+impl std::ops::Deref for Store {
     type Target = Arena<Type>;
 
     fn deref(&self) -> &Self::Target {
@@ -57,7 +57,7 @@ impl std::ops::Deref for Types {
     }
 }
 
-impl std::ops::DerefMut for Types {
+impl std::ops::DerefMut for Store {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.arena
     }
@@ -90,11 +90,11 @@ impl Scheme {
     }
 }
 
-type Env = Vec<Scheme>;
+type Env = BTreeMap<Local, Scheme>;
 type Subst = HashMap<TypeVar, TypeId>;
 
 #[derive(Debug, Clone)]
-enum TypeError {
+pub enum TypeError {
     Mismatch { left: TypeId, right: TypeId },
     InfiniteType { var: TypeVar, ty: TypeId },
 }
@@ -102,13 +102,14 @@ enum TypeError {
 pub struct Checker<'a> {
     ast: &'a Ast,
     tvar_count: u32,
-    types: Types,
-    locals: &'a AstTable<Option<Local>>,
+    store: Store,
+    pub table: AstTable<Option<TypeId>>,
+    resolution: &'a Resolution,
     debug_indent: usize,
 }
 
-pub fn typecheck(ast: &Ast, expr: ExprId, locals: &AstTable<Option<Local>>) {
-    let mut checker = Checker::new(ast, locals);
+pub fn typecheck(ast: &Ast, expr: ExprId, resolution: &Resolution) {
+    let mut checker = Checker::new(ast, resolution);
     match checker.infer_top(expr) {
         Ok(ty) => {
             println!("result => {}", checker.type_to_string(ty));
@@ -120,26 +121,29 @@ pub fn typecheck(ast: &Ast, expr: ExprId, locals: &AstTable<Option<Local>>) {
 }
 
 impl<'a> Checker<'a> {
-    pub fn new(ast: &'a Ast, locals: &'a AstTable<Option<Local>>) -> Self {
+    pub fn new(ast: &'a Ast, resolution: &'a Resolution) -> Self {
         Self {
             ast,
             tvar_count: 0,
-            types: Types::new(),
-            locals,
+            store: Store::new(),
+            table: ast.table(None),
+            resolution,
             debug_indent: 0,
         }
     }
 
-    fn infer_top(&mut self, expr: ExprId) -> Result<TypeId, TypeError> {
+    pub fn infer_top(&mut self, expr: ExprId) -> Result<TypeId, TypeError> {
         let env = Env::new();
         let (subst, ty) = self.infer(expr, &env)?;
-        Ok(self.apply(ty, &subst))
+        let ty = self.apply(ty, &subst);
+        self.table[expr] = Some(ty);
+        Ok(ty)
     }
 
     fn fresh_tvar(&mut self) -> TypeId {
         let tvar = TypeVar(self.tvar_count);
         self.tvar_count += 1;
-        self.types.alloc(Type::Var(tvar))
+        self.store.alloc(Type::Var(tvar))
     }
 
     fn compose(&mut self, newer: &Subst, older: &Subst) -> Subst {
@@ -155,7 +159,7 @@ impl<'a> Checker<'a> {
 
     fn apply_env(&mut self, env: &Env, subst: &Subst) -> Env {
         env.iter()
-            .map(|scheme| self.apply_scheme(scheme, subst))
+            .map(|(&local, scheme)| (local, self.apply_scheme(scheme, subst)))
             .collect()
     }
 
@@ -171,7 +175,7 @@ impl<'a> Checker<'a> {
     }
 
     fn apply(&mut self, ty: TypeId, subst: &Subst) -> TypeId {
-        match self.types[ty] {
+        match self.store[ty] {
             Type::Unit | Type::Int | Type::Bool => ty,
             Type::Var(var) => match subst.get(&var).copied() {
                 Some(ty) => self.apply(ty, subst),
@@ -180,13 +184,13 @@ impl<'a> Checker<'a> {
             Type::Abs(param, body) => {
                 let param_ty = self.apply(param, subst);
                 let body_ty = self.apply(body, subst);
-                self.types.alloc(Type::Abs(param_ty, body_ty))
+                self.store.alloc(Type::Abs(param_ty, body_ty))
             }
         }
     }
 
     fn free_type_vars(&self, ty: TypeId, acc: &mut Vec<TypeVar>) {
-        match self.types[ty] {
+        match self.store[ty] {
             Type::Unit | Type::Int | Type::Bool => {}
             Type::Var(var) => {
                 if !acc.contains(&var) {
@@ -211,7 +215,7 @@ impl<'a> Checker<'a> {
     }
 
     fn free_env_vars(&self, env: &Env, acc: &mut Vec<TypeVar>) {
-        for scheme in env {
+        for scheme in env.values() {
             self.free_scheme_vars(scheme, acc);
         }
     }
@@ -244,7 +248,7 @@ impl<'a> Checker<'a> {
 
     fn occurs_in(&mut self, needle: TypeVar, ty: TypeId, subst: &Subst) -> bool {
         let ty = self.apply(ty, subst);
-        match self.types[ty] {
+        match self.store[ty] {
             Type::Unit | Type::Int | Type::Bool => false,
             Type::Var(var) => var == needle,
             Type::Abs(param, body) => {
@@ -255,7 +259,7 @@ impl<'a> Checker<'a> {
 
     fn bind(&mut self, var: TypeVar, ty: TypeId, subst: &mut Subst) -> Result<(), TypeError> {
         let ty = self.apply(ty, subst);
-        if matches!(self.types[ty], Type::Var(found) if found == var) {
+        if matches!(self.store[ty], Type::Var(found) if found == var) {
             return Ok(());
         }
         if self.occurs_in(var, ty, subst) {
@@ -280,7 +284,7 @@ impl<'a> Checker<'a> {
             self.type_to_string(right)
         ));
 
-        match (self.types[left], self.types[right]) {
+        match (self.store[left], self.store[right]) {
             (Type::Unit, Type::Unit) | (Type::Int, Type::Int) | (Type::Bool, Type::Bool) => Ok(()),
             (Type::Var(a), Type::Var(b)) if a == b => Ok(()),
             (Type::Var(var), _) => self.bind(var, right, subst),
@@ -299,6 +303,7 @@ impl<'a> Checker<'a> {
         match &result {
             Ok((subst, ty)) => {
                 let ty = self.apply(*ty, subst);
+                self.table[expr] = Some(ty);
                 let ty = self.type_to_string(ty);
                 let subst = self.subst_to_string(subst);
                 self.debug(format_args!("=> {} with {}", ty, subst));
@@ -321,9 +326,9 @@ impl<'a> Checker<'a> {
             Expr::Lit(lit) => Ok((
                 Subst::new(),
                 match lit {
-                    Lit::Unit => self.types.unit(),
-                    Lit::Int(_) => self.types.int(),
-                    Lit::Bool(_) => self.types.bool(),
+                    Lit::Unit => self.store.unit(),
+                    Lit::Int(_) => self.store.int(),
+                    Lit::Bool(_) => self.store.bool(),
                 },
             )),
 
@@ -332,8 +337,8 @@ impl<'a> Checker<'a> {
             // ------------------------
             // Γ ⊢ x : instantiate(σ)
             Expr::Var(_) => {
-                let local = self.locals[expr].unwrap();
-                let scheme = &env[local.0 as usize];
+                let local = self.resolution.uses[expr].unwrap();
+                let scheme = env.get(&local).unwrap();
                 let ty = self.instantiate(scheme);
                 self.debug(format_args!(
                     "instantiate {} as {}",
@@ -349,12 +354,13 @@ impl<'a> Checker<'a> {
             // Γ ⊢ \x.e : α -> τ
             Expr::Abs(_, body) => {
                 let param_ty = self.fresh_tvar();
+                let binder = self.resolution.binders[expr].unwrap();
                 let mut body_env = env.clone();
-                body_env.push(Scheme::monomorphic(param_ty));
+                body_env.insert(binder, Scheme::monomorphic(param_ty));
 
                 let (subst, body_ty) = self.infer(*body, &body_env)?;
                 let param_ty = self.apply(param_ty, &subst);
-                let fun_ty = self.types.alloc(Type::Abs(param_ty, body_ty));
+                let fun_ty = self.store.alloc(Type::Abs(param_ty, body_ty));
 
                 Ok((subst, fun_ty))
             }
@@ -371,7 +377,7 @@ impl<'a> Checker<'a> {
                 let mut subst = self.compose(&subst_arg, &subst_fun);
                 let result_ty = self.fresh_tvar();
                 let arg_ty = self.apply(arg_ty, &subst);
-                let expected_fun_ty = self.types.alloc(Type::Abs(arg_ty, result_ty));
+                let expected_fun_ty = self.store.alloc(Type::Abs(arg_ty, result_ty));
 
                 self.unify(fun_ty, expected_fun_ty, &mut subst)?;
 
@@ -388,19 +394,19 @@ impl<'a> Checker<'a> {
                 let mut subst = self.compose(&subst_rhs, &subst_lhs);
                 let result_ty = match op {
                     Token::Plus | Token::Minus | Token::Star | Token::Slash => {
-                        let int_ty = self.types.int();
+                        let int_ty = self.store.int();
                         self.unify(lhs_ty, int_ty, &mut subst)?;
                         self.unify(rhs_ty, int_ty, &mut subst)?;
                         int_ty
                     }
                     Token::Gt | Token::GtEq | Token::Lt | Token::LtEq => {
-                        self.unify(lhs_ty, self.types.int(), &mut subst)?;
-                        self.unify(rhs_ty, self.types.int(), &mut subst)?;
-                        self.types.bool()
+                        self.unify(lhs_ty, self.store.int(), &mut subst)?;
+                        self.unify(rhs_ty, self.store.int(), &mut subst)?;
+                        self.store.bool()
                     }
                     Token::EqEq | Token::BangEq => {
                         self.unify(lhs_ty, rhs_ty, &mut subst)?;
-                        self.types.bool()
+                        self.store.bool()
                     }
                     _ => unreachable!("parser only builds binary expressions for binary operators"),
                 };
@@ -418,10 +424,11 @@ impl<'a> Checker<'a> {
                 init,
                 body,
             } => {
+                let binder = self.resolution.binders[expr].unwrap();
                 if *is_recursive {
                     let placeholder_ty = self.fresh_tvar();
                     let mut init_env = env.clone();
-                    init_env.push(Scheme::monomorphic(placeholder_ty));
+                    init_env.insert(binder, Scheme::monomorphic(placeholder_ty));
 
                     let (subst_init, init_ty) = self.infer(*init, &init_env)?;
                     let mut subst = subst_init;
@@ -433,7 +440,7 @@ impl<'a> Checker<'a> {
                         "generalize rec binding as {}",
                         self.scheme_to_string(&scheme)
                     ));
-                    body_env.push(scheme);
+                    body_env.insert(binder, scheme);
 
                     let (subst_body, body_ty) = self.infer(*body, &body_env)?;
                     let subst = self.compose(&subst_body, &subst);
@@ -447,7 +454,7 @@ impl<'a> Checker<'a> {
                         "generalize binding as {}",
                         self.scheme_to_string(&scheme)
                     ));
-                    body_env.push(scheme);
+                    body_env.insert(binder, scheme);
 
                     let (subst_body, body_ty) = self.infer(*body, &body_env)?;
                     let subst = self.compose(&subst_body, &subst_init);
@@ -467,8 +474,7 @@ impl<'a> Checker<'a> {
             } => {
                 let (subst_cond, cond_ty) = self.infer(*cond, env)?;
                 let mut subst = subst_cond;
-                // let bool_ty = self.arena.alloc(Type::Bool);
-                self.unify(cond_ty, self.types.bool, &mut subst)?;
+                self.unify(cond_ty, self.store.bool(), &mut subst)?;
 
                 let then_env = self.apply_env(env, &subst);
                 let (subst_then, then_ty) = self.infer(*then_branch, &then_env)?;
@@ -571,14 +577,14 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn type_to_string(&self, id: TypeId) -> String {
-        match self.types[id] {
+    pub fn type_to_string(&self, id: TypeId) -> String {
+        match self.store[id] {
             Type::Unit => "()".to_string(),
             Type::Int => "int".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Var(var) => self.type_var_to_string(var),
             Type::Abs(param, ret) => {
-                let param = match self.types[param] {
+                let param = match self.store[param] {
                     Type::Abs(_, _) => format!("({})", self.type_to_string(param)),
                     _ => self.type_to_string(param),
                 };
@@ -596,8 +602,8 @@ mod tests {
     fn infer_source(source: &str) -> Result<String, String> {
         let mut interner = Interner::with_capacity(64);
         let (ast, expr) = parser::parse(source, &mut interner).unwrap();
-        let locals = resolver::resolve(&ast, expr, &interner);
-        let mut checker = Checker::new(&ast, &locals);
+        let resolution = resolver::resolve(&ast, expr, &interner);
+        let mut checker = Checker::new(&ast, &resolution);
         checker
             .infer_top(expr)
             .map(|ty| checker.type_to_string(ty))

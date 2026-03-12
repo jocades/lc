@@ -4,13 +4,21 @@ use crate::Symbol;
 use crate::ast::{Ast, AstTable, Expr, ExprId, Table};
 use crate::interner::Interner;
 
-pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> AstTable<Option<Local>> {
-    let mut resolver = Resolver::new(ast, interner);
-    resolver.resolve(root);
-    resolver.locals
+pub struct Resolution {
+    pub uses: AstTable<Option<Local>>,
+    pub binders: AstTable<Option<Local>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub fn resolve(ast: &Ast, root: ExprId, interner: &Interner) -> Resolution {
+    let mut resolver = Resolver::new(ast, interner);
+    resolver.resolve(root);
+    Resolution {
+        uses: resolver.uses,
+        binders: resolver.binders,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Local(pub u32);
 
 #[derive(Debug, PartialEq)]
@@ -42,9 +50,10 @@ struct Resolver<'a> {
     /// Stack of variable scopes
     scopes: Vec<Scope>,
     /// Array of locals parallel to `Ast::nodes`.
-    locals: Table<ExprId, Option<Local>>,
-    /// Counter for locals in the **current** scope.
-    local_count: u32,
+    uses: Table<ExprId, Option<Local>>,
+    binders: Table<ExprId, Option<Local>>,
+    /// Monotonic counter for globally unique binding IDs.
+    next_local: u32,
 }
 
 impl<'a> Resolver<'a> {
@@ -53,8 +62,9 @@ impl<'a> Resolver<'a> {
             ast,
             interner,
             scopes: vec![Scope::new()],
-            locals: ast.table(None),
-            local_count: 0,
+            uses: ast.table(None),
+            binders: ast.table(None),
+            next_local: 0,
         }
     }
 
@@ -70,7 +80,6 @@ impl<'a> Resolver<'a> {
 
     fn exit_scope(&mut self) {
         let scope = self.scopes.pop().unwrap();
-        self.local_count -= scope.len() as u32;
         for (sym, var) in scope {
             if var.state != VarState::Read {
                 println!(
@@ -88,8 +97,8 @@ impl<'a> Resolver<'a> {
     }
 
     fn declare(&mut self, sym: Symbol) -> Local {
-        let local = Local(self.local_count);
-        self.local_count += 1;
+        let local = Local(self.next_local);
+        self.next_local += 1;
         self.scope()
             .insert(sym, Var::new(local, VarState::Declared));
         local
@@ -110,11 +119,12 @@ impl<'a> Resolver<'a> {
             Expr::Lit(_) => {}
             Expr::Var(sym) => {
                 let local = self.lookup(*sym);
-                self.locals[expr] = local;
+                self.uses[expr] = local;
             }
             Expr::Abs(param, body) => {
                 self.with_scope(|this| {
-                    this.declare(*param);
+                    let binder = this.declare(*param);
+                    this.binders[expr] = Some(binder);
                     this.resolve(*body);
                 });
             }
@@ -135,12 +145,14 @@ impl<'a> Resolver<'a> {
                 if !is_recursive {
                     self.resolve(*init);
                     self.with_scope(|this| {
-                        this.declare(*name);
+                        let binder = this.declare(*name);
+                        this.binders[expr] = Some(binder);
                         this.resolve(*body);
                     });
                 } else {
                     self.with_scope(|this| {
-                        this.declare(*name);
+                        let binder = this.declare(*name);
+                        this.binders[expr] = Some(binder);
                         this.resolve(*init);
                         this.resolve(*body);
                     });

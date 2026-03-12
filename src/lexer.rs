@@ -7,7 +7,7 @@ use std::{fmt, ops};
 pub enum Token {
     Eof,
     // items
-    Ident, Num, Unit,
+    Ident, Num,
     // delims
     Lam, Dot, Comma,
     Semi, LParen, RParen,
@@ -46,7 +46,7 @@ fn lookup_ident(lexeme: &str) -> Token {
 ///
 /// A span can be constructed from, and turned into, a `std::ops::Range<usize>`.
 /// To join spans use the [Span::union] method or the overloaded `bitwise or`.
-/// ```
+/// ```ignore
 /// let first = Span::from(0..2); // {start: 0, end: 2}
 /// let second = Span::from(4..8); // {start: 4, end: 8}
 /// let span = first | second; // {start: 0, end: 8} same as `first.union(second)`
@@ -203,7 +203,6 @@ impl<'a> Lexer<'a> {
             b'.' => Token::Dot,
             b',' => Token::Comma,
             b';' => Token::Semi,
-            b'(' if self.matches(b')') => Token::Unit,
             b'(' => Token::LParen,
             b')' => Token::RParen,
             // operators
