@@ -1,0 +1,6 @@
+let x = 1 in
+let y = 2 in
+if x + y == 3 then
+  100
+else
+  200

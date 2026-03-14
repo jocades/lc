@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::{
     ast::{Ast, Expr, ExprId, Lit},
     interner::Interner,
-    ir::{self, BinOp, BlockId, Fun},
+    ir::{self, BinOp, BlockId},
     lexer::Token,
     parser,
 };
@@ -22,12 +22,15 @@ pub enum Op {
     Jump(u16),
     JumpIfFalse(u16),
 
+    Call(ir::FunId, u8),
+
     Return,
 }
 
 /// The result of a compiled function.
-pub struct Chunk {
+pub struct Function {
     pub code: Vec<Op>,
+    pub arity: u8,
     pub local_count: usize,
 }
 
@@ -55,20 +58,25 @@ struct Emitter {
     patches: Vec<Patch>,
 }
 
-pub fn emit_fun(fun: &Fun) -> Chunk {
+pub fn emit(program: &ir::Program) -> Vec<Function> {
+    program.funs.iter().map(emit_fun).collect()
+}
+
+pub fn emit_fun(fun: &ir::Fun) -> Function {
     let mut emitter = Emitter::default();
 
     emitter.emit_blocks(fun);
     emitter.patch_jumps();
 
-    Chunk {
+    Function {
         code: emitter.code,
         local_count: fun.locals as usize,
+        arity: fun.arity as u8,
     }
 }
 
 impl Emitter {
-    fn emit_blocks(&mut self, fun: &Fun) {
+    fn emit_blocks(&mut self, fun: &ir::Fun) {
         for block in &fun.blocks {
             self.block_offsets.insert(block.id, self.code.len());
 
@@ -90,7 +98,7 @@ impl Emitter {
 
             ir::Value::Env(_) => todo!(),
             ir::Value::Unit => todo!(),
-            ir::Value::Fun(_) => todo!(),
+            ir::Value::Fun(fun_id) => {}
         }
     }
 
@@ -101,14 +109,6 @@ impl Emitter {
                 self.code.push(Op::StoreLocal(*dst as u16));
             }
 
-            ir::Instr::Move { dst: _, src } => {
-                self.emit_value(src);
-            }
-
-            ir::Instr::LoadConst { dst, value } => {
-                self.emit_value(value);
-            }
-
             ir::Instr::Bin { dst, op, lhs, rhs } => {
                 self.emit_value(lhs);
                 self.emit_value(rhs);
@@ -117,7 +117,15 @@ impl Emitter {
             }
 
             ir::Instr::MakeClosure { dst, fun, captures } => todo!(),
-            ir::Instr::Call { dst, callee, args } => todo!(),
+            ir::Instr::Call { dst, callee, args } => {
+                let ir::Value::Fun(fun_id) = callee else {
+                    todo!("only non-capturing lambdas for now, {callee:?}")
+                };
+                for arg in args {
+                    self.emit_value(arg);
+                }
+                self.code.push(Op::Call(*fun_id, 1));
+            }
         }
     }
 
@@ -145,10 +153,10 @@ impl Emitter {
             } => {
                 self.emit_value(cond);
 
-                let at_false = self.code.len();
+                let at_cond = self.code.len();
                 self.code.push(Op::JumpIfFalse(u16::MAX));
                 self.patches.push(Patch {
-                    at: at_false,
+                    at: at_cond,
                     target: *else_block,
                     kind: PatchKind::JumpIfFalse,
                 });
@@ -216,11 +224,18 @@ impl std::fmt::Display for Value {
     }
 }
 
+struct CallFrame {
+    fun: ir::FunId,
+    ip: usize,
+    base: usize,
+}
+
 #[derive(Default)]
 pub struct VM {
-    ip: usize,
     stack: Vec<Value>,
-    base: usize,
+    frames: Vec<CallFrame>,
+    pub functions: Vec<Function>,
+    // base: usize,
 }
 
 impl VM {
@@ -234,16 +249,16 @@ impl VM {
         self.stack.pop().expect("vm stack underflow")
     }
 
-    #[inline]
-    fn load_local(&self, slot: u16) -> Value {
-        self.stack[self.base + slot as usize]
-    }
-
-    #[inline]
-    fn store_local(&mut self, slot: u16, value: Value) {
-        let index = self.base + slot as usize;
-        self.stack[index] = value;
-    }
+    // #[inline]
+    // fn load_local(&self, slot: u16) -> Value {
+    //     self.stack[self.base + slot as usize]
+    // }
+    //
+    // #[inline]
+    // fn store_local(&mut self, slot: u16, value: Value) {
+    //     let index = self.base + slot as usize;
+    //     self.stack[index] = value;
+    // }
 
     #[inline]
     fn pop_int2(&mut self) -> (i32, i32) {
@@ -284,50 +299,93 @@ impl VM {
         }
     }
 
-    pub fn run(&mut self, chunk: &Chunk) -> Value {
-        self.ip = 0;
-        self.base = self.stack.len();
+    pub fn call(&mut self, fun_id: ir::FunId, argc: u8) {
+        let fun = &self.functions[fun_id as usize];
+
+        let frame = CallFrame {
+            fun: fun_id,
+            ip: 0,
+            base: self.stack.len() - argc as usize,
+        };
+
+        for _ in 0..fun.local_count - argc as usize {
+            self.stack.push(Value::Int(0));
+            // self.push(Value::Int(0));
+        }
+        self.frames.push(frame);
+    }
+
+    // pub fn execute()
+
+    pub fn run(&mut self) {
+        macro_rules! push {
+            ($value:expr) => {
+                self.stack.push($value)
+            };
+        }
+        macro_rules! pop {
+            () => {
+                self.stack.pop().expect("vm stack underflow")
+            };
+        }
+        // self.ip = 0;
+        // self.base = self.stack.len();
 
         // Preallocate local slots
-        for _ in 0..chunk.local_count {
-            self.push(Value::Int(0));
-        }
+        // for _ in 0..chunk.local_count {
+        //     self.push(Value::Int(0));
+        // }
 
         loop {
-            let op = chunk.code[self.ip];
-            self.ip += 1;
+            let frame = self.frames.last_mut().unwrap();
+            let op = self.functions[frame.fun as usize].code[frame.ip];
+            frame.ip += 1;
 
             println!("  {:?}", self.stack);
-            println!("{:02}: {op:?}", self.ip - 1);
+            println!("{:02}: {op:?}", frame.ip - 1);
 
             match op {
-                Op::ConstInt(n) => self.push(Value::Int(n)),
+                Op::ConstInt(n) => {
+                    // self.push(Value::Int(n));
+                    push!(Value::Int(n));
+                }
                 Op::ConstBool(b) => self.push(Value::Bool(b)),
 
                 Op::LoadLocal(slot) => {
-                    let value = self.load_local(slot);
-                    self.push(value);
+                    let value = self.stack[frame.base + slot as usize];
+                    push!(value);
                 }
                 Op::StoreLocal(slot) => {
-                    let value = self.pop();
-                    self.store_local(slot, value);
+                    let value = pop!();
+                    self.stack[frame.base + slot as usize] = value;
                 }
 
                 Op::Bin(bin_op) => self.exec_bin(bin_op),
 
                 Op::Jump(target) => {
-                    self.ip = target as usize;
+                    frame.ip = target as usize;
                 }
                 Op::JumpIfFalse(target) => {
-                    if !self.pop().as_bool() {
-                        self.ip = target as usize;
+                    // cannot borrow self as mutable since we are holding a ref to frame
+                    // let cond = self.pop().as_bool();
+                    if !self.stack.pop().unwrap().as_bool() {
+                        frame.ip = target as usize;
                     }
+                }
+
+                Op::Call(fun, argc) => {
+                    self.call(fun, argc);
                 }
 
                 Op::Return => {
                     let value = self.pop();
-                    self.stack.truncate(self.base);
-                    return value;
+                    println!("RET {value:?}");
+                    let frame = self.frames.pop().unwrap();
+                    if self.frames.is_empty() {
+                        return;
+                    }
+                    self.stack.truncate(frame.base);
+                    self.stack.push(value);
                 }
             }
         }

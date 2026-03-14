@@ -3,6 +3,7 @@ mod interner;
 use interner::{Interner, Symbol};
 
 mod arena;
+mod bytecode;
 mod checker;
 mod compiler;
 mod diagnostic;
@@ -38,29 +39,33 @@ pub fn interpret(source: &str) {
                 return;
             };
 
-            let mut lowerer = ir::Lowerer::new(&ast, &resolution, &checker.table);
-            lowerer.lower(expr);
+            for (i, (id, _)) in ast.iter().enumerate() {
+                if let Some(ty) = checker.table[id] {
+                    print!("{i:02}: {}", checker.type_to_string(ty));
+                    if let Some(b) = resolution.binders[id] {
+                        print!(" :binder {}", b.0);
+                    }
+                    if let Some(u) = resolution.uses[id] {
+                        print!(" :use {}", u.0);
+                    }
+                    println!();
+                }
+            }
 
-            println!("ir:");
-            print!("{}", lowerer.program.pretty());
+            let mut vm = bytecode::VM::default();
+            let emitter = bytecode::Emitter::new(&ast, &resolution, &checker.table, &mut vm.funs);
+            let fun = emitter.emit(expr);
 
-            dbg!(&lowerer.program);
+            for (i, fun) in vm.funs.iter().enumerate() {
+                println!("=== fn{i} ===");
+                fun.code
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, op)| println!("{i:02}: {op:?}"));
+            }
 
-            let main_fun = &lowerer.program.funs[0];
-            let chunk = vm::emit_fun(main_fun);
-
-            println!();
-            chunk
-                .code
-                .iter()
-                .enumerate()
-                .for_each(|(i, op)| println!("{i:02}: {op:?}"));
-            println!();
-
-            use vm::VM;
-            let mut vm = VM::default();
-            let result = vm.run(&chunk);
-            println!("result = {result}");
+            vm.call(fun, 0);
+            vm.run();
         }
         Ok(None) => {}
         Err(diags) => {

@@ -26,7 +26,7 @@ pub struct Program {
 pub struct Fun {
     pub id: FunId,
     pub name: Option<Symbol>,
-    pub arity: u16,
+    pub arity: u8,
     pub captures: Vec<Capture>,
     pub locals: u32,
     pub temps: u32,
@@ -64,14 +64,6 @@ pub enum Value {
 
 #[derive(Debug)]
 pub enum Instr {
-    LoadConst {
-        dst: TempId,
-        value: Value,
-    },
-    Move {
-        dst: TempId,
-        src: Value,
-    },
     StoreLocal {
         dst: LocalSlot,
         src: Value,
@@ -185,25 +177,23 @@ impl<'a> Lowerer<'a> {
         let fun_id = 0;
         let block_id = 0;
 
-        {
-            self.program.entry = fun_id;
+        self.program.entry = fun_id;
 
-            let main_fun = Fun {
-                id: fun_id,
-                name: None,
-                arity: 0,
-                captures: vec![],
-                locals: 0,
-                temps: 0,
-                blocks: vec![Block {
-                    id: block_id,
-                    instrs: vec![],
-                    term: Terminator::Unset,
-                }],
-            };
+        let main_fun = Fun {
+            id: fun_id,
+            name: None,
+            arity: 0,
+            captures: vec![],
+            locals: 0,
+            temps: 0,
+            blocks: vec![Block {
+                id: block_id,
+                instrs: vec![],
+                term: Terminator::Unset,
+            }],
+        };
 
-            self.program.funs.push(main_fun);
-        }
+        self.program.funs.push(main_fun);
 
         let mut cx = FunContext {
             fun: fun_id,
@@ -312,9 +302,71 @@ impl<'a> Lowerer<'a> {
                 self.lower_expr(*body, cx)
             }
 
-            Expr::Abs(symbol, id) => todo!(),
+            Expr::Abs(param, body) => {
+                // 1. create new fun
+                // 2. create new fun context
+                // 3. map param to local 0
+                // 4. recurse into lower_expr
+                // 5. add return terminator
+                // 6. produce a fun value in the caller
 
-            Expr::App(id, id1) => todo!(),
+                let fun_id = self.program.funs.len() as FunId;
+
+                let new_fun = Fun {
+                    id: fun_id,
+                    name: None,
+                    arity: 1,
+                    captures: vec![],
+                    locals: 0,
+                    temps: 0,
+                    blocks: vec![Block {
+                        id: 0,
+                        instrs: vec![],
+                        term: Terminator::Unset,
+                    }],
+                };
+
+                self.program.funs.push(new_fun);
+
+                let mut new_cx = FunContext {
+                    fun: fun_id,
+                    current_block: 0,
+                    next_temp: 0,
+                    next_local: 0,
+                    resolved_locals: HashMap::new(),
+                    captures: HashMap::new(),
+                };
+
+                let bound_param = new_cx.fresh_local();
+                let binder = self.resolution.binders[expr].unwrap();
+                new_cx.resolved_locals.insert(binder, bound_param);
+
+                let result = self.lower_expr(*body, &mut new_cx);
+
+                let new_fun = &mut self.program.funs[fun_id as usize];
+                new_fun.locals = new_cx.next_local;
+                new_fun.temps = new_cx.next_temp;
+                new_fun.blocks[new_cx.current_block as usize].term = Terminator::Return(result);
+
+                Value::Fun(fun_id) // support only non-capturing lambas for now
+            }
+
+            Expr::App(lhs, arg) => {
+                let callee = self.lower_expr(*lhs, cx);
+                let arg = self.lower_expr(*arg, cx);
+
+                let dst = cx.fresh_temp();
+                self.push_instr(
+                    cx,
+                    Instr::Call {
+                        dst,
+                        callee,
+                        args: vec![arg],
+                    },
+                );
+
+                Value::Temp(dst)
+            }
 
             // Binary expressions lower their operands first, then emit one three-address
             // instruction whose result lives in a fresh temp.
@@ -446,8 +498,6 @@ impl Program {
 
 fn pretty_instr(instr: &Instr) -> String {
     match instr {
-        Instr::LoadConst { dst, value } => format!("t{dst} = const {}", pretty_value(value)),
-        Instr::Move { dst, src } => format!("t{dst} = {}", pretty_value(src)),
         Instr::StoreLocal { dst, src } => format!("l{dst} = {}", pretty_value(src)),
         Instr::Bin { dst, op, lhs, rhs } => format!(
             "t{dst} = {} {}, {}",
