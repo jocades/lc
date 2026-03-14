@@ -1,22 +1,38 @@
 fn main() {
-    let source = r#"
-        let b = true in
-        let z = if b then
-          let x = 2 in x + 1
-        else
-          let y = 3 in y + 1
-        in
-        z * 2
-    "#;
+    let exmaples = [
+        ("ID", "\\x.x"),
+        // uncurry into fixed fn with N args
+        ("UNCURRY", "let add a b = a + b in add 2 3"),
+        // single capture
+        // ("SINGLE_CAPTURE", "let x = 1 in let f y = x + y in f 2"),
+        // capture parents capture
+        // (
+        //     "CAPTURE PARENTS CAPTURE",
+        //     "let x = 1 in let f y z = x + y + z in f 2 3",
+        // ),
+        (
+            "PAP",
+            "let add a b = a + b in let add_one b = add 1 in add_one 2",
+        ),
+    ];
 
-    // lc::interpret("let f x = x in f 1 + f 2");
-    // lc::interpret("let rec f _ = f in f 1");
-    lc::interpret("let rec f n = if n == 0 then true else f (n-1) in f 1");
+    for (name, source) in exmaples {
+        println!("{name}");
+        lc::interpret(source);
+    }
+
+    // closure:
+    // lc::interpret("let f x = x in f")
+    // lc::interpret("let x = 1 in let f y = x + y in f 2");
+    // lc::interpret("let x = 1 in let f y z = x + y + z in f 2 3");
+    // lc::interpret("let add a b = a + b in add 2 3");
+    // lc::interpret("let rec f n = if n == 0 then true else f (n-1) in f 1");
     // lc::interpret("1 + 2");
     // lc::interpret("let x = 1 in let y = 2 in x + y");
     // lc::interpret("(1 + 2) * 3");
 
-    // lc::interpret("let x = 69 in x + 2");
+    // lc::interpret("let f x = x in f 1");
+    // lc::interpret("let f x = x in f 1 + 2");
     // lc::interpret("let x = if true then 2 + 3 else 4 + 5 in x");
     // lc::interpret("let id = \\x.x in id 1");
 

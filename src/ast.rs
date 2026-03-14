@@ -86,14 +86,14 @@ impl<I: Indexer, T> IndexMut<I> for Table<I, T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Lit {
     Unit,
     Int(i32),
     Bool(bool),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Expr {
     Lit(Lit),
     Var(Symbol),

@@ -54,7 +54,7 @@ pub fn interpret(source: &str) {
 
             let mut vm = bytecode::VM::default();
             let emitter = bytecode::Emitter::new(&ast, &resolution, &checker.table, &mut vm.funs);
-            let fun = emitter.emit(expr);
+            let fun = emitter.emit(expr, 0);
 
             for (i, fun) in vm.funs.iter().enumerate() {
                 println!("=== fn{i} ===");
@@ -64,7 +64,14 @@ pub fn interpret(source: &str) {
                     .for_each(|(i, op)| println!("{i:02}: {op:?}"));
             }
 
-            vm.call(fun, 0);
+            let closure = bytecode::Closure {
+                fun,
+                captures: vec![],
+            };
+
+            vm.closures.push(closure);
+
+            vm.call(0, 0);
             vm.run();
         }
         Ok(None) => {}
