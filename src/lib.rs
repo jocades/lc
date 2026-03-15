@@ -53,11 +53,26 @@ pub fn interpret(source: &str) {
             }
 
             let mut vm = bytecode::VM::default();
-            let emitter = bytecode::Emitter::new(&ast, &resolution, &checker.table, &mut vm.funs);
-            let fun = emitter.emit(expr, 0);
+            let cx = bytecode::Context {
+                ast: &ast,
+                resolution: &resolution,
+                types: &checker.table,
+                funs: &mut vm.funs,
+            };
+
+            let em = bytecode::Em {
+                cx,
+                bb: bytecode::Builder::default(),
+                env: bytecode::E::default(),
+                slot_count: 0,
+            };
+            let fun = em.emit_fun(expr, 0);
+            // let emitter = bytecode::Emitter::new(&ast, &resolution, &checker.table, &mut vm.funs);
+            // let fun = emitter.emit(expr, 0);
 
             for (i, fun) in vm.funs.iter().enumerate() {
                 println!("=== fn{i} ===");
+                println!("arity={} captures={:?}", fun.arity, fun.captures);
                 fun.code
                     .iter()
                     .enumerate()
@@ -65,7 +80,7 @@ pub fn interpret(source: &str) {
             }
 
             let closure = bytecode::Closure {
-                fun,
+                fun: &mut vm.funs[fun],
                 captures: vec![],
             };
 
