@@ -330,7 +330,7 @@ pub struct Fun {
     pub code: Vec<u8>,
     pub arity: u8,
     pub captures: Vec<Local>,
-    consts: Vec<Value>,
+    pub consts: Vec<Value>,
 }
 
 pub struct Closure {
@@ -338,62 +338,24 @@ pub struct Closure {
     pub captures: Vec<Value>,
 }
 
+#[derive(Debug)]
 struct CallFrame {
     closure: *const Closure,
     ip: *mut u8,
     base: usize,
 }
 
-impl CallFrame {
-    /// Fetch the next byte and advance the instruction pointer.
-    fn fetch_byte(&mut self) -> u8 {
-        unsafe {
-            let byte = *self.ip;
-            self.ip = self.ip.add(1);
-            byte
-        }
-    }
-
-    fn fetch_u16(&mut self) -> u16 {
-        let hi = self.fetch_byte() as u16;
-        let lo = self.fetch_byte() as u16;
-        (hi << 8) | lo
-    }
-}
-
 #[derive(Default)]
 pub struct VM {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
+    /// A compile time function.
     pub funs: Vec<Fun>,
+    /// A runtime function which may have captured other values.
     pub closures: Vec<Closure>,
 }
 
 impl VM {
-    #[inline]
-    fn push(&mut self, value: Value) {
-        self.stack.push(value);
-    }
-
-    #[inline]
-    fn pop(&mut self) -> Value {
-        self.stack.pop().expect("vm stack underflow")
-    }
-
-    #[inline]
-    fn pop_int2(&mut self) -> (i32, i32) {
-        let rhs = self.pop().as_int();
-        let lhs = self.pop().as_int();
-        (lhs, rhs)
-    }
-
-    #[inline]
-    fn pop_bool2(&mut self) -> (bool, bool) {
-        let rhs = self.pop().as_bool();
-        let lhs = self.pop().as_bool();
-        (lhs, rhs)
-    }
-
     pub fn call(&mut self, clo: usize, argc: u8) {
         let closure = &self.closures[clo];
         let frame = CallFrame {
@@ -422,15 +384,15 @@ impl VM {
         }
         macro_rules! bin {
             ($as:path, $op:tt) => {{
-                let (lhs, rhs) = self.pop_int2();
-                self.push($as(lhs $op rhs));
+                let (rhs, lhs) = (pop!().as_int(), pop!().as_int());
+                push!($as(lhs $op rhs));
             }};
         }
 
         unsafe {
-            /* let frame = &raw mut self.frames[self.frames.len() - 1];
-            let ip = (*frame).ip;
-            let fun = (*(*frame).closure).fun;
+            let mut frame: *mut _ = self.frames.last_mut().unwrap();
+            let mut ip = (*frame).ip;
+            let mut fun = &*(*(*frame).closure).fun;
 
             macro_rules! fetch_u8 {
                 () => {{
@@ -439,29 +401,28 @@ impl VM {
                     byte
                 }};
             }
-
-            macro_rules! read_const {
-                () => {{}};
-            } */
+            macro_rules! fetch_u16 {
+                () => {{
+                    let (hi, lo) = (*ip as u16, *ip.add(1) as u16);
+                    ip = ip.add(2);
+                    (hi << 8) | lo
+                }};
+            }
+            macro_rules! fetch_const {
+                () => {{
+                    let index = fetch_u8!() as usize;
+                    fun.consts[index]
+                }};
+            }
 
             loop {
-                let frame = self.frames.last_mut().unwrap();
-                let fun = &*(*frame.closure).fun;
-                let opcode = frame.fetch_byte();
-
-                // println!("  {:?}", self.stack);
-                // println!(
-                //     "{:02}: {}",
-                //     *frame.ip.offset(-1) as usize,
-                //     opcode::as_str(opcode)
-                // );
+                println!("  {:?}", self.stack);
+                dump_instruction(fun, ip.offset_from(fun.code.as_ptr()) as usize);
 
                 use opcode::*;
-                match opcode {
+                match fetch_u8!() {
                     CONST => {
-                        let index = frame.fetch_byte() as usize;
-                        let value = fun.consts[index];
-                        // let value = (*(*(*frame).closure).fun).consts[index];
+                        let value = fetch_const!();
                         push!(value);
                     }
 
@@ -469,41 +430,39 @@ impl VM {
                     FALSE => push!(Value::Bool(false)),
 
                     LOAD_LOCAL => {
-                        let slot = frame.fetch_byte() as usize;
-                        let value = self.stack[frame.base + slot];
+                        let slot = fetch_u8!() as usize;
+                        let value = self.stack[(*frame).base + slot];
                         push!(value);
                     }
                     LOAD_CAPTURE => {
-                        let slot = frame.fetch_byte() as usize;
-                        println!("LAOD_CAPTURE {slot}");
-                        let value = (&(*frame.closure).captures)[slot];
+                        let slot = fetch_u8!() as usize;
+                        let value = (&(*(*frame).closure).captures)[slot];
                         push!(value);
                     }
 
                     JMP => {
-                        // let offset = frame.fetch_u16() as usize;
-                        // frame.ip = frame.ip.add(offset);
+                        let offset = fetch_u16!() as usize;
+                        ip = ip.add(offset);
                     }
-                    JMP_IF_FALSE => {
-                        let offset = frame.fetch_u16() as usize;
+                    JMP_FALSE => {
+                        let offset = fetch_u16!() as usize;
                         if !pop!().as_bool() {
-                            frame.ip = frame.ip.add(offset);
+                            ip = ip.add(offset);
                         }
                     }
 
                     CLOSURE => {
-                        let index = frame.fetch_byte() as usize;
-                        let fun = fun.consts[index].as_closure();
+                        let fun = fetch_const!().as_closure();
                         let fun = &mut self.funs[fun];
 
                         let captures = (0..fun.captures.len())
                             .map(|_| {
-                                let is_local = frame.fetch_byte() != 0;
-                                let index = frame.fetch_byte() as usize;
+                                let is_local = fetch_u8!() != 0;
+                                let index = fetch_u8!() as usize;
                                 if is_local {
-                                    self.stack[frame.base + index]
+                                    self.stack[(*frame).base + index]
                                 } else {
-                                    (&(*frame.closure).captures)[index]
+                                    (&(*(*frame).closure).captures)[index]
                                 }
                             })
                             .collect();
@@ -514,20 +473,29 @@ impl VM {
                     }
 
                     CALL => {
-                        let argc = frame.fetch_byte();
+                        let argc = fetch_u8!();
                         let clo = peek!(argc).as_closure();
                         self.call(clo, argc);
+                        // since we are keeping the ip separate, save it so that we know
+                        // where to continue from once we return from this call
+                        (*frame).ip = ip;
+                        frame = self.frames.last_mut().unwrap();
+                        ip = (*frame).ip;
+                        fun = &*(*(*frame).closure).fun;
                     }
 
                     RET => {
                         let value = pop!();
-                        println!("RET {value:?}");
-                        let frame = self.frames.pop().unwrap();
+                        println!("=> {value}");
+                        self.frames.pop().unwrap();
                         if self.frames.is_empty() {
                             return;
                         }
-                        self.stack.truncate(frame.base - 1);
+                        self.stack.truncate((*frame).base - 1);
                         push!(value);
+                        frame = self.frames.last_mut().unwrap();
+                        ip = (*frame).ip;
+                        fun = &*(*(*frame).closure).fun;
                     }
 
                     ADD_INT => bin!(Value::Int, +),
@@ -540,50 +508,11 @@ impl VM {
                     LT_INT => bin!(Value::Bool, <),
                     LE_INT => bin!(Value::Bool, <=),
                     EQ_BOOL => {
-                        let (lhs, rhs) = self.pop_bool2();
-                        self.push(Value::Bool(lhs == rhs));
+                        let (rhs, lhs) = (pop!().as_bool(), pop!().as_bool());
+                        push!(Value::Bool(lhs == rhs));
                     }
 
                     0 | 21..=u8::MAX => unreachable!(),
-                    // Op::LoadCapture(slot) => {
-                    //     let value = self.closures[frame.closure].captures[slot as usize];
-                    //     push!(value);
-                    // }
-
-                    // Op::Bin(bin_op) => self.exec_bin(bin_op),
-                    // Op::Jmp(target) => {
-                    //     frame.ip = target as usize;
-                    // }
-                    // Op::JmpIfFalse(target) => {
-                    //     if !pop!().as_bool() {
-                    //         frame.ip = target as usize;
-                    //     }
-                    // }
-                    // Op::Closure(fun, capture_count) => {
-                    //     let mut captures = Vec::with_capacity(capture_count as usize);
-                    //     for _ in 0..capture_count {
-                    //         captures.push(pop!());
-                    //     }
-                    //     captures.reverse();
-                    //     let clo = self.closures.len();
-                    //     self.closures.push(Closure { fun, captures });
-                    //     self.push(Value::Closure(clo));
-                    // }
-
-                    // Op::Call(argc) => {
-                    //     let fun = peek!(argc).as_closure();
-                    //     self.call(fun, argc);
-                    // }
-                    // Op::Ret => {
-                    //     let value = self.pop();
-                    //     println!("RET {value:?}");
-                    //     let frame = self.frames.pop().unwrap();
-                    //     if self.frames.is_empty() {
-                    //         return;
-                    //     }
-                    //     self.stack.truncate(frame.base - 1);
-                    //     self.push(value);
-                    // }
                 }
             }
         }
@@ -613,7 +542,7 @@ mod opcode {
     pub const EQ_BOOL: u8 = 15;
 
     pub const JMP: u8 = 16;
-    pub const JMP_IF_FALSE: u8 = 17;
+    pub const JMP_FALSE: u8 = 17;
 
     pub const CLOSURE: u8 = 18;
     pub const CALL: u8 = 19;
@@ -642,7 +571,7 @@ mod opcode {
             EQ_BOOL => "EQ_BOOL",
 
             JMP => "JMP",
-            JMP_IF_FALSE => "JMP_IF_FALSE",
+            JMP_FALSE => "JMP_FALSE",
 
             CLOSURE => "CLOSURE",
             CALL => "CALL",
@@ -725,7 +654,7 @@ impl Builder {
     }
 
     pub fn jmp_if_false(&mut self) {
-        self.code.push(opcode::JMP_IF_FALSE);
+        self.code.push(opcode::JMP_FALSE);
         // self.write_u16(target);
     }
 
@@ -888,7 +817,7 @@ impl<'a> Em<'a> {
                 else_branch,
             } => {
                 self.emit_expr(cond);
-                self.bb.code.push(opcode::JMP_IF_FALSE);
+                self.bb.code.push(opcode::JMP_FALSE);
                 let then_jump = self.bb.code.len();
                 self.bb.write_bytes(0xff, 0xff);
                 self.emit_expr(then_branch);
@@ -987,5 +916,61 @@ impl<'a> Em<'a> {
 
             Expr::Error => todo!(),
         }
+    }
+}
+
+pub fn dump(fun: &Fun) {
+    let mut offset = 0;
+    while offset < fun.code.len() {
+        offset += dump_instruction(fun, offset);
+    }
+}
+
+pub fn dump_instruction(fun: &Fun, offset: usize) -> usize {
+    let op = fun.code[offset];
+    let name = opcode::as_str(op);
+    use opcode::*;
+    match op {
+        TRUE | FALSE | ADD_INT | SUB_INT | MUL_INT | DIV_INT | EQ_INT | GT_INT | GE_INT
+        | LT_INT | LE_INT | EQ_BOOL | RET => {
+            println!("{offset:04}  {name}");
+            1
+        }
+
+        CONST => {
+            let index = fun.code[offset + 1];
+            let value = fun.consts[index as usize];
+            println!("{offset:04}  {name:<10} {index} '{value}'");
+            2
+        }
+
+        LOAD_LOCAL | LOAD_CAPTURE => {
+            let slot = fun.code[offset + 1];
+            println!("{offset:04}  {name:<10} {slot}");
+            2
+        }
+
+        JMP | JMP_FALSE => {
+            let mut jump = (fun.code[offset + 1] as usize) << 8;
+            jump |= fun.code[offset + 2] as usize;
+            let target = offset + 3 + jump;
+            println!("{offset:04}  {name:<10} {offset} -> {target}");
+            3
+        }
+
+        CLOSURE => {
+            let index = fun.code[offset + 1];
+            let value = fun.consts[index as usize];
+            println!("{offset:04}  {name:<10} {index} '{value}'");
+            2
+        }
+
+        CALL => {
+            let argc = fun.code[offset + 1];
+            println!("{offset:04}  {name:<10} {argc}");
+            2
+        }
+
+        0 | 21..=u8::MAX => unreachable!(),
     }
 }

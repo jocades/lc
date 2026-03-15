@@ -66,17 +66,15 @@ pub fn interpret(source: &str) {
                 env: bytecode::E::default(),
                 slot_count: 0,
             };
+
             let fun = em.emit_fun(expr, 0);
-            // let emitter = bytecode::Emitter::new(&ast, &resolution, &checker.table, &mut vm.funs);
-            // let fun = emitter.emit(expr, 0);
 
             for (i, fun) in vm.funs.iter().enumerate() {
-                println!("=== fn{i} ===");
-                println!("arity={} captures={:?}", fun.arity, fun.captures);
-                fun.code
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, op)| println!("{i:02}: {op:?}"));
+                println!(
+                    "=== fn{i} arity={} captures={:?} ===",
+                    fun.arity, fun.captures
+                );
+                bytecode::dump(fun);
             }
 
             let closure = bytecode::Closure {
